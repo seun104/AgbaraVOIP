@@ -27,7 +27,8 @@ namespace Emmanuel.AgbaraVOIP.Freeswitch
             this._eventjsons = eventjson;
             transport = new InboundTransport(host, port, connect_timeout);
          }
-        public override void  connect()
+
+    public override void  connect()
     {
      /*
         Connects to mod_eventsocket, authenticates and sets event filter.
@@ -84,7 +85,7 @@ namespace Emmanuel.AgbaraVOIP.Freeswitch
             while (is_connected())
             {
 
-                Thread.SpinWait(10);
+                Thread.Sleep(100);
             }
         }
     }

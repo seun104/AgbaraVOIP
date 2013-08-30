@@ -127,7 +127,6 @@ namespace Emmanuel.AgbaraVOIP.Freeswitch
         }
         public virtual void handle_request( Socket socket)
         {
-            //Must be declared by class implenting this
             object[] param = new object[]{socket,_filter};
             var ty = (OutboundClient)Activator.CreateInstance(_requestClass, param);
         }

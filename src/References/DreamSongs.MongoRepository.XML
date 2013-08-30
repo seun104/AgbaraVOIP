@@ -1,0 +1,789 @@
+<?xml version="1.0"?>
+<doc>
+    <assembly>
+        <name>DreamSongs.MongoRepository</name>
+    </assembly>
+    <members>
+        <member name="T:DreamSongs.MongoRepository.CollectionName">
+            <summary>
+            Attribute used to annotate Enities with to override mongo collection name. By default, when this attribute
+            is not specified, the classname will be used.
+            </summary>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.CollectionName.#ctor(System.String)">
+            <summary>
+            Initializes a new instance of the CollectionName class attribute with the desired name.
+            </summary>
+            <param name="value">Name of the collection.</param>
+        </member>
+        <member name="P:DreamSongs.MongoRepository.CollectionName.Name">
+            <summary>
+            Gets the name of the collection.
+            </summary>
+            <value>The name of the collection.</value>
+        </member>
+        <member name="T:DreamSongs.MongoRepository.Entity">
+            <summary>
+            Abstract Entity for all the BusinessEntities.
+            </summary>
+        </member>
+        <member name="T:DreamSongs.MongoRepository.IEntity">
+            <summary>
+            Entity interface.
+            </summary>
+        </member>
+        <member name="P:DreamSongs.MongoRepository.IEntity.Id">
+            <summary>
+            Gets or sets the Id of the Entity.
+            </summary>
+            <value>Id of the Entity.</value>
+        </member>
+        <member name="P:DreamSongs.MongoRepository.Entity.Id">
+            <summary>
+            Gets or sets the id for this object (the primary record for an entity).
+            </summary>
+            <value>The id for this object (the primary record for an entity).</value>
+        </member>
+        <member name="T:DreamSongs.MongoRepository.Util">
+            <summary>
+            Internal miscellaneous utility functions.
+            </summary>
+        </member>
+        <member name="F:DreamSongs.MongoRepository.Util.DefaultConnectionstringName">
+            <summary>
+            The default key MongoRepository will look for in the App.config or Web.config file.
+            </summary>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.Util.GetDefaultConnectionString">
+            <summary>
+            Retrieves the default connectionstring from the App.config or Web.config file.
+            </summary>
+            <returns>Returns the default connectionstring from the App.config or Web.config file.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.Util.GetDatabaseFromUrl(MongoDB.Driver.MongoUrl)">
+            <summary>
+            Creates and returns a MongoDatabase from the specified url.
+            </summary>
+            <param name="url">The url to use to get the database from.</param>
+            <returns>Returns a MongoDatabase from the specified url.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.Util.GetCollectionFromConnectionString``1(System.String)">
+            <summary>
+            Creates and returns a MongoCollection from the specified type and connectionstring.
+            </summary>
+            <typeparam name="T">The type to get the collection of.</typeparam>
+            <param name="connectionstring">The connectionstring to use to get the collection from.</param>
+            <returns>Returns a MongoCollection from the specified type and connectionstring.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.Util.GetCollectionFromUrl``1(MongoDB.Driver.MongoUrl)">
+            <summary>
+            Creates and returns a MongoCollection from the specified type and url.
+            </summary>
+            <typeparam name="T">The type to get the collection of.</typeparam>
+            <param name="url">The url to use to get the collection from.</param>
+            <returns>Returns a MongoCollection from the specified type and url.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.Util.GetCollectionName``1">
+            <summary>
+            Determines the collectionname for T and assures it is not empty
+            </summary>
+            <typeparam name="T">The type to determine the collectionname for.</typeparam>
+            <returns>Returns the collectionname for T.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.Util.GetCollectioNameFromInterface``1">
+            <summary>
+            Determines the collectionname from the specified type.
+            </summary>
+            <typeparam name="T">The type to get the collectionname from.</typeparam>
+            <returns>Returns the collectionname from the specified type.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.Util.GetCollectionNameFromType(System.Type)">
+            <summary>
+            Determines the collectionname from the specified type.
+            </summary>
+            <param name="entitytype">The type of the entity to get the collectionname from.</param>
+            <returns>Returns the collectionname from the specified type.</returns>
+        </member>
+        <member name="T:DreamSongs.MongoRepository.MongoRepository`1">
+            <summary>
+            Deals with entities in MongoDb.
+            </summary>
+            <typeparam name="T">The type contained in the repository.</typeparam>
+        </member>
+        <member name="T:DreamSongs.MongoRepository.IRepository`1">
+            <summary>
+            IRepository definition.
+            </summary>
+            <typeparam name="T">The type contained in the repository.</typeparam>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepository`1.GetById(System.String)">
+            <summary>
+            Returns the T by its given id.
+            </summary>
+            <param name="id">The string representing the ObjectId of the entity to retrieve.</param>
+            <returns>The Entity T.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepository`1.GetSingle(System.Linq.Expressions.Expression{System.Func{`0,System.Boolean}})">
+            <summary>
+            Returns a single T by the given criteria.
+            </summary>
+            <param name="criteria">The expression.</param>
+            <returns>A single T matching the criteria.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepository`1.All">
+            <summary>
+            Returns All the records of T.
+            </summary>
+            <returns>IQueryable of T.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepository`1.All(System.Linq.Expressions.Expression{System.Func{`0,System.Boolean}})">
+            <summary>
+            Returns the list of T where it matches the criteria.
+            </summary>
+            <param name="criteria">The expression.</param>
+            <returns>IQueryable of T.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepository`1.Add(`0)">
+            <summary>
+            Adds the new entity in the repository.
+            </summary>
+            <param name="entity">The entity to add.</param>
+            <returns>The added entity including its new ObjectId.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepository`1.Add(System.Collections.Generic.IEnumerable{`0})">
+            <summary>
+            Adds the new entities in the repository.
+            </summary>
+            <param name="entities">The entities of type T.</param>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepository`1.Update(`0)">
+            <summary>
+            Upserts an entity.
+            </summary>
+            <param name="entity">The entity.</param>
+            <returns>The updated entity.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepository`1.Update(System.Collections.Generic.IEnumerable{`0})">
+            <summary>
+            Upserts the entities.
+            </summary>
+            <param name="entities">The entities to update.</param>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepository`1.Delete(System.String)">
+            <summary>
+            Deletes an entity from the repository by its id.
+            </summary>
+            <param name="id">The string representation of the entity's id.</param>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepository`1.Delete(`0)">
+            <summary>
+            Deletes the given entity.
+            </summary>
+            <param name="entity">The entity to delete.</param>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepository`1.Delete(System.Linq.Expressions.Expression{System.Func{`0,System.Boolean}})">
+            <summary>
+            Deletes the entities matching the criteria.
+            </summary>
+            <param name="criteria">The expression.</param>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepository`1.DeleteAll">
+            <summary>
+            Deletes all entities in the repository.
+            </summary>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepository`1.Count">
+            <summary>
+            Counts the total entities in the repository.
+            </summary>
+            <returns>Count of entities in the repository.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepository`1.Exists(System.Linq.Expressions.Expression{System.Func{`0,System.Boolean}})">
+            <summary>
+            Checks if the entity exists for given criteria.
+            </summary>
+            <param name="criteria">The expression.</param>
+            <returns>true when an entity matching the criteria exists, false otherwise.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepository`1.RequestStart">
+            <summary>
+            Lets the server know that this thread is about to begin a series of related operations that must all occur
+            on the same connection. The return value of this method implements IDisposable and can be placed in a using
+            statement (in which case RequestDone will be called automatically when leaving the using statement). 
+            </summary>
+            <returns>A helper object that implements IDisposable and calls RequestDone() from the Dispose method.</returns>
+            <remarks>
+            Sometimes a series of operations needs to be performed on the same connection in order to guarantee correct
+            results. This is rarely the case, and most of the time there is no need to call RequestStart/RequestDone.
+            An example of when this might be necessary is when a series of Inserts are called in rapid succession with
+            SafeMode off, and you want to query that data in a consistent manner immediately thereafter (with SafeMode
+            off the writes can queue up at the server and might not be immediately visible to other connections). Using
+            RequestStart you can force a query to be on the same connection as the writes, so the query won't execute
+            until the server has caught up with the writes.
+            A thread can temporarily reserve a connection from the connection pool by using RequestStart and
+            RequestDone. You are free to use any other databases as well during the request. RequestStart increments a
+            counter (for this thread) and RequestDone decrements the counter. The connection that was reserved is not
+            actually returned to the connection pool until the count reaches zero again. This means that calls to
+            RequestStart/RequestDone can be nested and the right thing will happen.
+            </remarks>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepository`1.RequestStart(System.Boolean)">
+            <summary>
+            Lets the server know that this thread is about to begin a series of related operations that must all occur
+            on the same connection. The return value of this method implements IDisposable and can be placed in a using
+            statement (in which case RequestDone will be called automatically when leaving the using statement). 
+            </summary>
+            <returns>A helper object that implements IDisposable and calls RequestDone() from the Dispose method.</returns>
+            <param name="slaveOk">Whether queries should be sent to secondary servers.</param>
+            <remarks>
+            Sometimes a series of operations needs to be performed on the same connection in order to guarantee correct
+            results. This is rarely the case, and most of the time there is no need to call RequestStart/RequestDone.
+            An example of when this might be necessary is when a series of Inserts are called in rapid succession with
+            SafeMode off, and you want to query that data in a consistent manner immediately thereafter (with SafeMode
+            off the writes can queue up at the server and might not be immediately visible to other connections). Using
+            RequestStart you can force a query to be on the same connection as the writes, so the query won't execute
+            until the server has caught up with the writes.
+            A thread can temporarily reserve a connection from the connection pool by using RequestStart and
+            RequestDone. You are free to use any other databases as well during the request. RequestStart increments a
+            counter (for this thread) and RequestDone decrements the counter. The connection that was reserved is not
+            actually returned to the connection pool until the count reaches zero again. This means that calls to
+            RequestStart/RequestDone can be nested and the right thing will happen.
+            </remarks>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepository`1.RequestDone">
+            <summary>
+            Lets the server know that this thread is done with a series of related operations.
+            </summary>
+            <remarks>
+            Instead of calling this method it is better to put the return value of RequestStart in a using statement.
+            </remarks>
+        </member>
+        <member name="P:DreamSongs.MongoRepository.IRepository`1.Collection">
+            <summary>
+            Gets the Mongo collection (to perform advanced operations).
+            </summary>
+            <remarks>
+            One can argue that exposing this property (and with that, access to it's Database property for instance
+            (which is a "parent")) is not the responsibility of this class.
+            </remarks>
+            <value>The Mongo collection (to perform advanced operations).</value>
+        </member>
+        <member name="F:DreamSongs.MongoRepository.MongoRepository`1.collection">
+            <summary>
+            MongoCollection field.
+            </summary>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepository`1.#ctor">
+            <summary>
+            Initializes a new instance of the MongoRepository class.
+            Uses the Default App/Web.Config connectionstrings to fetch the connectionString and Database name.
+            </summary>
+            <remarks>Default constructor defaults to "MongoServerSettings" key for connectionstring.</remarks>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepository`1.#ctor(System.String)">
+            <summary>
+            Initializes a new instance of the MongoRepository class.
+            </summary>
+            <param name="connectionString">Connectionstring to use for connecting to MongoDB.</param>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepository`1.#ctor(MongoDB.Driver.MongoUrl)">
+            <summary>
+            Initializes a new instance of the MongoRepository class.
+            </summary>
+            <param name="url">Url to use for connecting to MongoDB.</param>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepository`1.GetById(System.String)">
+            <summary>
+            Returns the T by its given id.
+            </summary>
+            <param name="id">The string representing the ObjectId of the entity to retrieve.</param>
+            <returns>The Entity T.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepository`1.GetSingle(System.Linq.Expressions.Expression{System.Func{`0,System.Boolean}})">
+            <summary>
+            Returns a single T by the given criteria.
+            </summary>
+            <param name="criteria">The expression.</param>
+            <returns>A single T matching the criteria.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepository`1.All(System.Linq.Expressions.Expression{System.Func{`0,System.Boolean}})">
+            <summary>
+            Returns the list of T where it matches the criteria.
+            </summary>
+            <param name="criteria">The expression.</param>
+            <returns>IQueryable of T.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepository`1.All">
+            <summary>
+            Returns All the records of T.
+            </summary>
+            <returns>IQueryable of T.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepository`1.Add(`0)">
+            <summary>
+            Adds the new entity in the repository.
+            </summary>
+            <param name="entity">The entity T.</param>
+            <returns>The added entity including its new ObjectId.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepository`1.Add(System.Collections.Generic.IEnumerable{`0})">
+            <summary>
+            Adds the new entities in the repository.
+            </summary>
+            <param name="entities">The entities of type T.</param>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepository`1.Update(`0)">
+            <summary>
+            Upserts an entity.
+            </summary>
+            <param name="entity">The entity.</param>
+            <returns>The updated entity.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepository`1.Update(System.Collections.Generic.IEnumerable{`0})">
+            <summary>
+            Upserts the entities.
+            </summary>
+            <param name="entities">The entities to update.</param>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepository`1.Delete(System.String)">
+            <summary>
+            Deletes an entity from the repository by its id.
+            </summary>
+            <param name="id">The string representation of the entity's id.</param>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepository`1.Delete(`0)">
+            <summary>
+            Deletes the given entity.
+            </summary>
+            <param name="entity">The entity to delete.</param>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepository`1.Delete(System.Linq.Expressions.Expression{System.Func{`0,System.Boolean}})">
+            <summary>
+            Deletes the entities matching the criteria.
+            </summary>
+            <param name="criteria">The expression.</param>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepository`1.DeleteAll">
+            <summary>
+            Deletes all entities in the repository.
+            </summary>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepository`1.Count">
+            <summary>
+            Counts the total entities in the repository.
+            </summary>
+            <returns>Count of entities in the collection.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepository`1.Exists(System.Linq.Expressions.Expression{System.Func{`0,System.Boolean}})">
+            <summary>
+            Checks if the entity exists for given criteria.
+            </summary>
+            <param name="criteria">The expression.</param>
+            <returns>true when an entity matching the criteria exists, false otherwise.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepository`1.RequestStart">
+            <summary>
+            Lets the server know that this thread is about to begin a series of related operations that must all occur
+            on the same connection. The return value of this method implements IDisposable and can be placed in a using
+            statement (in which case RequestDone will be called automatically when leaving the using statement). 
+            </summary>
+            <returns>A helper object that implements IDisposable and calls RequestDone() from the Dispose method.</returns>
+            <remarks>
+            Sometimes a series of operations needs to be performed on the same connection in order to guarantee correct
+            results. This is rarely the case, and most of the time there is no need to call RequestStart/RequestDone.
+            An example of when this might be necessary is when a series of Inserts are called in rapid succession with
+            SafeMode off, and you want to query that data in a consistent manner immediately thereafter (with SafeMode
+            off the writes can queue up at the server and might not be immediately visible to other connections). Using
+            RequestStart you can force a query to be on the same connection as the writes, so the query won't execute
+            until the server has caught up with the writes.
+            A thread can temporarily reserve a connection from the connection pool by using RequestStart and
+            RequestDone. You are free to use any other databases as well during the request. RequestStart increments a
+            counter (for this thread) and RequestDone decrements the counter. The connection that was reserved is not
+            actually returned to the connection pool until the count reaches zero again. This means that calls to
+            RequestStart/RequestDone can be nested and the right thing will happen.
+            </remarks>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepository`1.RequestStart(System.Boolean)">
+            <summary>
+            Lets the server know that this thread is about to begin a series of related operations that must all occur
+            on the same connection. The return value of this method implements IDisposable and can be placed in a using
+            statement (in which case RequestDone will be called automatically when leaving the using statement). 
+            </summary>
+            <returns>A helper object that implements IDisposable and calls RequestDone() from the Dispose method.</returns>
+            <param name="slaveOk">Whether queries should be sent to secondary servers.</param>
+            <remarks>
+            Sometimes a series of operations needs to be performed on the same connection in order to guarantee correct
+            results. This is rarely the case, and most of the time there is no need to call RequestStart/RequestDone.
+            An example of when this might be necessary is when a series of Inserts are called in rapid succession with
+            SafeMode off, and you want to query that data in a consistent manner immediately thereafter (with SafeMode
+            off the writes can queue up at the server and might not be immediately visible to other connections). Using
+            RequestStart you can force a query to be on the same connection as the writes, so the query won't execute
+            until the server has caught up with the writes.
+            A thread can temporarily reserve a connection from the connection pool by using RequestStart and
+            RequestDone. You are free to use any other databases as well during the request. RequestStart increments a
+            counter (for this thread) and RequestDone decrements the counter. The connection that was reserved is not
+            actually returned to the connection pool until the count reaches zero again. This means that calls to
+            RequestStart/RequestDone can be nested and the right thing will happen.
+            </remarks>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepository`1.RequestDone">
+            <summary>
+            Lets the server know that this thread is done with a series of related operations.
+            </summary>
+            <remarks>
+            Instead of calling this method it is better to put the return value of RequestStart in a using statement.
+            </remarks>
+        </member>
+        <member name="P:DreamSongs.MongoRepository.MongoRepository`1.Collection">
+            <summary>
+            Gets the Mongo collection (to perform advanced operations).
+            </summary>
+            <remarks>
+            One can argue that exposing this property (and with that, access to it's Database property for instance
+            (which is a "parent")) is not the responsibility of this class.
+            </remarks>
+            <value>The Mongo collection (to perform advanced operations).</value>
+        </member>
+        <member name="T:DreamSongs.MongoRepository.MongoRepositoryManager`1">
+            <summary>
+            Deals with the collections of entities in MongoDb. This class tries to hide as much MongoDb-specific details
+            as possible but it's not 100% *yet*. It is a very thin wrapper around most methods on MongoDb's MongoCollection
+            objects.
+            </summary>
+            <typeparam name="T">The type contained in the repository to manage.</typeparam>
+        </member>
+        <member name="T:DreamSongs.MongoRepository.IRepositoryManager`1">
+            <summary>
+            IRepositoryManager definition.
+            </summary>
+            <typeparam name="T">The type contained in the repository to manage.</typeparam>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepositoryManager`1.Drop">
+            <summary>
+            Drops the repository.
+            </summary>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepositoryManager`1.IsCapped">
+            <summary>
+            Tests whether the repository is capped.
+            </summary>
+            <returns>Returns true when the repository is capped, false otherwise.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepositoryManager`1.DropIndex(System.String)">
+            <summary>
+            Drops specified index on the repository.
+            </summary>
+            <param name="keyname">The name of the indexed field.</param>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepositoryManager`1.DropIndexes(System.Collections.Generic.IEnumerable{System.String})">
+            <summary>
+            Drops specified indexes on the repository.
+            </summary>
+            <param name="keynames">The names of the indexed fields.</param>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepositoryManager`1.DropAllIndexes">
+            <summary>
+            Drops all indexes on this repository.
+            </summary>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepositoryManager`1.EnsureIndex(System.String)">
+            <summary>
+            Ensures that the desired index exist and creates it if it doesn't exist.
+            </summary>
+            <param name="keyname">The indexed field.</param>
+            <remarks>
+            This is a convenience method for EnsureIndexes(IMongoIndexKeys keys, IMongoIndexOptions options).
+            Index will be ascending order, non-unique, non-sparse.
+            </remarks>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepositoryManager`1.EnsureIndex(System.String,System.Boolean,System.Boolean,System.Boolean)">
+            <summary>
+            Ensures that the desired index exist and creates it if it doesn't exist.
+            </summary>
+            <param name="keyname">The indexed field.</param>
+            <param name="descending">Set to true to make index descending, false for ascending.</param>
+            <param name="unique">Set to true to ensure index enforces unique values.</param>
+            <param name="sparse">Set to true to specify the index is sparse.</param>
+            <remarks>
+            This is a convenience method for EnsureIndexes(IMongoIndexKeys keys, IMongoIndexOptions options).
+            </remarks>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepositoryManager`1.EnsureIndexes(System.Collections.Generic.IEnumerable{System.String})">
+            <summary>
+            Ensures that the desired indexes exist and creates them if they don't exist.
+            </summary>
+            <param name="keynames">The indexed fields.</param>
+            <remarks>
+            This is a convenience method for EnsureIndexes(IMongoIndexKeys keys, IMongoIndexOptions options).
+            Index will be ascending order, non-unique, non-sparse.
+            </remarks>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepositoryManager`1.EnsureIndexes(System.Collections.Generic.IEnumerable{System.String},System.Boolean,System.Boolean,System.Boolean)">
+            <summary>
+            Ensures that the desired indexes exist and creates them if they don't exist.
+            </summary>
+            <param name="keynames">The indexed fields.</param>
+            <param name="descending">Set to true to make index descending, false for ascending.</param>
+            <param name="unique">Set to true to ensure index enforces unique values.</param>
+            <param name="sparse">Set to true to specify the index is sparse.</param>
+            <remarks>
+            This is a convenience method for EnsureIndexes(IMongoIndexKeys keys, IMongoIndexOptions options).
+            </remarks>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepositoryManager`1.EnsureIndexes(MongoDB.Driver.IMongoIndexKeys,MongoDB.Driver.IMongoIndexOptions)">
+            <summary>
+            Ensures that the desired indexes exist and creates them if they don't exist.
+            </summary>
+            <param name="keys">The indexed fields.</param>
+            <param name="options">The index options.</param>
+            <remarks>
+            This is a convenience method for EnsureIndexes(IMongoIndexKeys keys, IMongoIndexOptions options).
+            Index will be ascending order, non-unique, non-sparse.
+            </remarks>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepositoryManager`1.IndexExists(System.String)">
+            <summary>
+            Tests whether indexes exist.
+            </summary>
+            <param name="keyname">The indexed fields.</param>
+            <returns>Returns true when the indexes exist, false otherwise.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepositoryManager`1.IndexesExists(System.Collections.Generic.IEnumerable{System.String})">
+            <summary>
+            Tests whether indexes exist.
+            </summary>
+            <param name="keynames">The indexed fields.</param>
+            <returns>Returns true when the indexes exist, false otherwise.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepositoryManager`1.ReIndex">
+            <summary>
+            Runs the ReIndex command on this repository.
+            </summary>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepositoryManager`1.ResetIndexCache">
+            <summary>
+            Removes all entries for this repository in the index cache used by EnsureIndex.
+            </summary>
+            <remarks>
+            Call this method when you know (or suspect) that a process other than this one may
+            have dropped one or more indexes.
+            </remarks>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepositoryManager`1.GetTotalDataSize">
+            <summary>
+            Gets the total size for the repository (data + indexes).
+            </summary>
+            <returns>Returns total size for the repository (data + indexes).</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepositoryManager`1.GetTotalStorageSize">
+            <summary>
+            Gets the total storage size for the repository (data + indexes).
+            </summary>
+            <returns>Returns total storage size for the repository (data + indexes).</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepositoryManager`1.Validate">
+            <summary>
+            Validates the integrity of the repository.
+            </summary>
+            <returns>Returns a ValidateCollectionResult.</returns>
+            <remarks>You will need to reference MongoDb.Driver.</remarks>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepositoryManager`1.GetStats">
+            <summary>
+            Gets stats for this repository.
+            </summary>
+            <returns>Returns a CollectionStatsResult.</returns>
+            <remarks>You will need to reference MongoDb.Driver.</remarks>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.IRepositoryManager`1.GetIndexes">
+            <summary>
+            Gets the indexes for this repository.
+            </summary>
+            <returns>Returns the indexes for this repository.</returns>
+        </member>
+        <member name="P:DreamSongs.MongoRepository.IRepositoryManager`1.Exists">
+            <summary>
+            Gets a value indicating whether the collection already exists.
+            </summary>
+            <value>Returns true when the collection already exists, false otherwise.</value>
+        </member>
+        <member name="P:DreamSongs.MongoRepository.IRepositoryManager`1.Name">
+            <summary>
+            Gets the name of the collection as Mongo uses.
+            </summary>
+            <value>The name of the collection as Mongo uses.</value>
+        </member>
+        <member name="F:DreamSongs.MongoRepository.MongoRepositoryManager`1.collection">
+            <summary>
+            MongoCollection field.
+            </summary>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepositoryManager`1.#ctor">
+            <summary>
+            Initializes a new instance of the MongoRepositoryManager class.
+            Uses the Default App/Web.Config connectionstrings to fetch the connectionString and Database name.
+            </summary>
+            <remarks>Default constructor defaults to "MongoServerSettings" key for connectionstring.</remarks>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepositoryManager`1.#ctor(System.String)">
+            <summary>
+            Initializes a new instance of the MongoRepositoryManager class.
+            </summary>
+            <param name="connectionString">Connectionstring to use for connecting to MongoDB.</param>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepositoryManager`1.Drop">
+            <summary>
+            Drops the collection.
+            </summary>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepositoryManager`1.IsCapped">
+            <summary>
+            Tests whether the repository is capped.
+            </summary>
+            <returns>Returns true when the repository is capped, false otherwise.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepositoryManager`1.DropIndex(System.String)">
+            <summary>
+            Drops specified index on the repository.
+            </summary>
+            <param name="keyname">The name of the indexed field.</param>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepositoryManager`1.DropIndexes(System.Collections.Generic.IEnumerable{System.String})">
+            <summary>
+            Drops specified indexes on the repository.
+            </summary>
+            <param name="keynames">The names of the indexed fields.</param>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepositoryManager`1.DropAllIndexes">
+            <summary>
+            Drops all indexes on this repository.
+            </summary>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepositoryManager`1.EnsureIndex(System.String)">
+            <summary>
+            Ensures that the desired index exist and creates it if it doesn't exist.
+            </summary>
+            <param name="keyname">The indexed field.</param>
+            <remarks>
+            This is a convenience method for EnsureIndexes(IMongoIndexKeys keys, IMongoIndexOptions options).
+            Index will be ascending order, non-unique, non-sparse.
+            </remarks>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepositoryManager`1.EnsureIndex(System.String,System.Boolean,System.Boolean,System.Boolean)">
+            <summary>
+            Ensures that the desired index exist and creates it if it doesn't exist.
+            </summary>
+            <param name="keyname">The indexed field.</param>
+            <param name="descending">Set to true to make index descending, false for ascending.</param>
+            <param name="unique">Set to true to ensure index enforces unique values.</param>
+            <param name="sparse">Set to true to specify the index is sparse.</param>
+            <remarks>
+            This is a convenience method for EnsureIndexes(IMongoIndexKeys keys, IMongoIndexOptions options).
+            </remarks>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepositoryManager`1.EnsureIndexes(System.Collections.Generic.IEnumerable{System.String})">
+            <summary>
+            Ensures that the desired indexes exist and creates them if they don't exist.
+            </summary>
+            <param name="keynames">The indexed fields.</param>
+            <remarks>
+            This is a convenience method for EnsureIndexes(IMongoIndexKeys keys, IMongoIndexOptions options).
+            Index will be ascending order, non-unique, non-sparse.
+            </remarks>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepositoryManager`1.EnsureIndexes(System.Collections.Generic.IEnumerable{System.String},System.Boolean,System.Boolean,System.Boolean)">
+            <summary>
+            Ensures that the desired indexes exist and creates them if they don't exist.
+            </summary>
+            <param name="keynames">The indexed fields.</param>
+            <param name="descending">Set to true to make index descending, false for ascending.</param>
+            <param name="unique">Set to true to ensure index enforces unique values.</param>
+            <param name="sparse">Set to true to specify the index is sparse.</param>
+            <remarks>
+            This is a convenience method for EnsureIndexes(IMongoIndexKeys keys, IMongoIndexOptions options).
+            </remarks>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepositoryManager`1.EnsureIndexes(MongoDB.Driver.IMongoIndexKeys,MongoDB.Driver.IMongoIndexOptions)">
+            <summary>
+            Ensures that the desired indexes exist and creates them if they don't exist.
+            </summary>
+            <param name="keys">The indexed fields.</param>
+            <param name="options">The index options.</param>
+            <remarks>
+            This method allows ultimate control but does "leak" some MongoDb specific implementation details.
+            </remarks>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepositoryManager`1.IndexExists(System.String)">
+            <summary>
+            Tests whether indexes exist.
+            </summary>
+            <param name="keyname">The indexed fields.</param>
+            <returns>Returns true when the indexes exist, false otherwise.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepositoryManager`1.IndexesExists(System.Collections.Generic.IEnumerable{System.String})">
+            <summary>
+            Tests whether indexes exist.
+            </summary>
+            <param name="keynames">The indexed fields.</param>
+            <returns>Returns true when the indexes exist, false otherwise.</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepositoryManager`1.ReIndex">
+            <summary>
+            Runs the ReIndex command on this repository.
+            </summary>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepositoryManager`1.ResetIndexCache">
+            <summary>
+            Removes all entries for this repository in the index cache used by EnsureIndex.
+            </summary>
+            <remarks>
+            Call this method when you know (or suspect) that a process other than this one may
+            have dropped one or more indexes.
+            </remarks>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepositoryManager`1.GetTotalDataSize">
+            <summary>
+            Gets the total size for the repository (data + indexes).
+            </summary>
+            <returns>Returns total size for the repository (data + indexes).</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepositoryManager`1.GetTotalStorageSize">
+            <summary>
+            Gets the total storage size for the repository (data + indexes).
+            </summary>
+            <returns>Returns total storage size for the repository (data + indexes).</returns>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepositoryManager`1.Validate">
+            <summary>
+            Validates the integrity of the repository.
+            </summary>
+            <returns>Returns a ValidateCollectionResult.</returns>
+            <remarks>You will need to reference MongoDb.Driver.</remarks>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepositoryManager`1.GetStats">
+            <summary>
+            Gets stats for this repository.
+            </summary>
+            <returns>Returns a CollectionStatsResult.</returns>
+            <remarks>You will need to reference MongoDb.Driver.</remarks>
+        </member>
+        <member name="M:DreamSongs.MongoRepository.MongoRepositoryManager`1.GetIndexes">
+            <summary>
+            Gets the indexes for this repository.
+            </summary>
+            <returns>Returns the indexes for this repository.</returns>
+        </member>
+        <member name="P:DreamSongs.MongoRepository.MongoRepositoryManager`1.Exists">
+            <summary>
+            Gets a value indicating whether the collection already exists.
+            </summary>
+            <value>Returns true when the collection already exists, false otherwise.</value>
+        </member>
+        <member name="P:DreamSongs.MongoRepository.MongoRepositoryManager`1.Name">
+            <summary>
+            Gets the name of the collection as Mongo uses.
+            </summary>
+            <value>The name of the collection as Mongo uses.</value>
+        </member>
+    </members>
+</doc>

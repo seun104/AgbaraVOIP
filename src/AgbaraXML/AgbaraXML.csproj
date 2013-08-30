@@ -1,0 +1,94 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProductVersion>8.0.30703</ProductVersion>
+    <SchemaVersion>2.0</SchemaVersion>
+    <ProjectGuid>{041D58A7-AAFA-46A7-B1E0-282B3E7EDAA5}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <AppDesignerFolder>Properties</AppDesignerFolder>
+    <RootNamespace>Emmanuel.AgbaraVOIP.AgbaraXML</RootNamespace>
+    <AssemblyName>AgbaraXML</AssemblyName>
+    <TargetFrameworkVersion>v4.0</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="AsyncCtpLibrary">
+      <HintPath>..\References\AsyncCtpLibrary.dll</HintPath>
+    </Reference>
+    <Reference Include="DreamSongs.MongoRepository">
+      <HintPath>..\References\DreamSongs.MongoRepository.dll</HintPath>
+    </Reference>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Web" />
+    <Reference Include="System.Xml.Linq" />
+    <Reference Include="System.Data.DataSetExtensions" />
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Xml" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Element\Reject.cs" />
+    <Compile Include="FSOutbound.cs" />
+    <Compile Include="AgbaraXMLServer.cs" />
+    <Compile Include="Element\Client.cs" />
+    <Compile Include="Element\Conference.cs" />
+    <Compile Include="Element\Dial.cs" />
+    <Compile Include="Element\Element.cs" />
+    <Compile Include="Element\Gather.cs" />
+    <Compile Include="Element\Hangup.cs" />
+    <Compile Include="Element\Number.cs" />
+    <Compile Include="Element\Pause.cs" />
+    <Compile Include="Element\Play.cs" />
+    <Compile Include="Element\PreAnswer.cs" />
+    <Compile Include="Element\Record.cs" />
+    <Compile Include="Element\Redirect.cs" />
+    <Compile Include="Element\Say.cs" />
+    <Compile Include="Element\Sms.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Util\ElementTypeLoader.cs" />
+    <Compile Include="Util\Helpers.cs" />
+    <Compile Include="Util\LogWriter.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\AgbaraUtil\AgbaraCommon.csproj">
+      <Project>{204F64DF-FA09-4061-8A3E-4A6F25D0FB8F}</Project>
+      <Name>AgbaraCommon</Name>
+    </ProjectReference>
+    <ProjectReference Include="..\Domain\AgbaraDomain.csproj">
+      <Project>{35D79AC8-9DB4-448D-9469-5997313440FC}</Project>
+      <Name>AgbaraDomain</Name>
+    </ProjectReference>
+    <ProjectReference Include="..\Freeswitch\Freeswitch.csproj">
+      <Project>{2F9F7D18-BBD3-41A4-80B3-772AAA903172}</Project>
+      <Name>Freeswitch</Name>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+  <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
+       Other similar extension points exist, see Microsoft.Common.targets.
+  <Target Name="BeforeBuild">
+  </Target>
+  <Target Name="AfterBuild">
+  </Target>
+  -->
+</Project>

@@ -1,0 +1,114 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProductVersion>8.0.30703</ProductVersion>
+    <SchemaVersion>2.0</SchemaVersion>
+    <ProjectGuid>{35D79AC8-9DB4-448D-9469-5997313440FC}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <AppDesignerFolder>Properties</AppDesignerFolder>
+    <RootNamespace>Emmanuel.AgbaraVOIP.Domain</RootNamespace>
+    <AssemblyName>Domain</AssemblyName>
+    <TargetFrameworkVersion>v4.0</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="DreamSongs.MongoRepository">
+      <HintPath>..\..\..\..\..\Documents\SampleCodes\mongorepository_full.1.3.0\mongorepository_full.1.3.0\DreamSongs.MongoRepository.dll</HintPath>
+    </Reference>
+    <Reference Include="MongoDB.Bson">
+      <HintPath>..\..\..\..\..\Documents\SampleCodes\mongorepository_full.1.3.0\mongorepository_full.1.3.0\MongoDB.Bson.dll</HintPath>
+    </Reference>
+    <Reference Include="MongoDB.Driver">
+      <HintPath>..\..\..\..\..\Documents\SampleCodes\mongorepository_full.1.3.0\mongorepository_full.1.3.0\MongoDB.Driver.dll</HintPath>
+    </Reference>
+    <Reference Include="ServiceStack.Common">
+      <HintPath>..\References\ServiceStack.Common.dll</HintPath>
+    </Reference>
+    <Reference Include="ServiceStack.Interfaces">
+      <HintPath>..\References\ServiceStack.Interfaces.dll</HintPath>
+    </Reference>
+    <Reference Include="ServiceStack.OrmLite">
+      <HintPath>..\References\ServiceStack.OrmLite.dll</HintPath>
+    </Reference>
+    <Reference Include="ServiceStack.OrmLite.SqlServer">
+      <HintPath>..\References\ServiceStack.OrmLite.SqlServer.dll</HintPath>
+    </Reference>
+    <Reference Include="System" />
+    <Reference Include="System.configuration" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Xml.Linq" />
+    <Reference Include="System.Data.DataSetExtensions" />
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Xml" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Objects\Account.cs" />
+    <Compile Include="Objects\Application.cs" />
+    <Compile Include="Objects\Call.cs" />
+    <Compile Include="Objects\Conference.cs" />
+    <Compile Include="Objects\EntityBase.cs" />
+    <Compile Include="Objects\FSServer.cs" />
+    <Compile Include="Objects\Gateway.cs" />
+    <Compile Include="Objects\Notification.cs" />
+    <Compile Include="Objects\Participant.cs" />
+    <Compile Include="Objects\Recording.cs" />
+    <Compile Include="Objects\SMS.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Services\IApplicationService.cs" />
+    <Compile Include="Services\IConferenceService.cs" />
+    <Compile Include="Services\IFSService.cs" />
+    <Compile Include="Services\IAccountService.cs" />
+    <Compile Include="Services\INotificationService.cs" />
+    <Compile Include="Services\IRecordingService.cs" />
+    <Compile Include="Services\ISMSService.cs" />
+    <Compile Include="Services\SQL\AccountService.cs" />
+    <Compile Include="Services\SQL\ApplicationService.cs" />
+    <Compile Include="Services\SQL\CallService.cs" />
+    <Compile Include="Services\ICallService.cs" />
+    <Compile Include="Services\SQL\ConferenceService.cs" />
+    <Compile Include="Services\SQL\FSService.cs" />
+    <Compile Include="Services\SQL\OrmBase.cs" />
+    <Compile Include="Services\SQL\RecordingService.cs" />
+    <Compile Include="Services\SQL\SMSService.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="Repository\" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\AgbaraUtil\AgbaraCommon.csproj">
+      <Project>{204F64DF-FA09-4061-8A3E-4A6F25D0FB8F}</Project>
+      <Name>AgbaraCommon</Name>
+    </ProjectReference>
+  </ItemGroup>
+  <ItemGroup>
+    <WCFMetadata Include="Service References\" />
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+  <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
+       Other similar extension points exist, see Microsoft.Common.targets.
+  <Target Name="BeforeBuild">
+  </Target>
+  <Target Name="AfterBuild">
+  </Target>
+  -->
+</Project>
