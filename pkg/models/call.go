@@ -4,133 +4,101 @@ import (
 	"time"
 )
 
-// CallStatus represents the status of a call.
+// CallStatus (already defined, ensure it's complete)
 type CallStatus string
-
 const (
 	CallStatusQueued     CallStatus = "queued"
+	CallStatusInitiating CallStatus = "initiating" // New status for when FS origination starts
 	CallStatusRinging    CallStatus = "ringing"
 	CallStatusInProgress CallStatus = "in-progress"
 	CallStatusCompleted  CallStatus = "completed"
 	CallStatusFailed     CallStatus = "failed"
 	CallStatusBusy       CallStatus = "busy"
 	CallStatusNoAnswer   CallStatus = "no-answer"
-	CallStatusCanceled   CallStatus = "canceled" // If a queued call is cancelled
+	CallStatusCanceled   CallStatus = "canceled"
 )
 
-// Call model, corresponds to Domain/Objects/Call.cs
+// Call model update
 type Call struct {
-	Sid          string     `json:"sid"`
-	AccountSid   string     `json:"accountSid"`
-	CallerId     string     `json:"callerId,omitempty"` // From field in CallRequest
-	CallTo       string     `json:"callTo"`           // To field in CallRequest
-	AnswerUrl    string     `json:"answerUrl"`
-	Status       CallStatus `json:"status"`
-	Timeout      string     `json:"timeout,omitempty"`      // String to match C#; service layer converts to int for DB
-	Direction    string     `json:"direction,omitempty"`
-	Duration     int        `json:"duration"`             // In seconds
-	Price        float64    `json:"price"`                // Assuming float64 for price
-	StartTime    time.Time  `json:"startTime"`
-	EndTime      time.Time  `json:"endTime,omitempty"`    // omitempty if not set
-	DateCreated  time.Time  `json:"dateCreated"`
-	DateUpdated  time.Time  `json:"dateUpdated"`
-	AnsweredBy   string     `json:"answeredBy,omitempty"`
+	Sid              string     `json:"sid"`
+	AccountSid       string     `json:"accountSid"`
+	CallerId         string     `json:"callerId,omitempty"`
+	CallTo           string     `json:"callTo"`
+	AnswerUrl        string     `json:"answerUrl,omitempty"` // Used if ApplicationSid is not provided or App has no VoiceUrl
+	ApplicationSid   string     `json:"applicationSid,omitempty"` // Reference to an Application for call handling logic
+	Status           CallStatus `json:"status"`
+	Timeout          string     `json:"timeout,omitempty"`      
+	Direction        string     `json:"direction,omitempty"`
+	Duration         int        `json:"duration"`             
+	Price            float64    `json:"price"`                
+	StartTime        time.Time  `json:"startTime"`
+	EndTime          time.Time  `json:"endTime,omitempty"`    
+	DateCreated      time.Time  `json:"dateCreated"`
+	DateUpdated      time.Time  `json:"dateUpdated"`
+	AnsweredBy       string     `json:"answeredBy,omitempty"`
+	FreeswitchCallID string     `json:"freeswitchCallId,omitempty"` // To store FS Channel UUID or Job UUID
 }
 
-// CallRequest model for POST /Accounts/{AccountSid}/Calls/Call
-// Based on src/AgbaraAPI/Model/Call/CallRequest.cs
+// CallRequest model update
 type CallRequest struct {
-	// AccountSid is set from path/auth context
-	From                 string `json:"from,omitempty"` // Maps to Call.CallerId
+	From                 string `json:"from,omitempty"` // Caller ID. Can be "Name <Number>" or just Number.
 	To                   string `json:"to" binding:"required"`
-	ApplicationSid       string `json:"applicationSid,omitempty"` // SID of an Application to handle the call
-	AnswerUrl            string `json:"answerUrl" binding:"required_without=ApplicationSid"` // Required if AppSID not given
-	Method               string `json:"method,omitempty"`           // "GET" or "POST" for AnswerUrl
-	FallbackUrl          string `json:"fallbackUrl,omitempty"`
-	FallbackMethod       string `json:"fallbackMethod,omitempty"`
-	StatusCallbackUrl    string `json:"statusCallbackUrl,omitempty"`
+	ApplicationSid       string `json:"applicationSid,omitempty"` 
+	AnswerUrl            string `json:"answerUrl,omitempty"` // Fallback/alternative if ApplicationSid is not used. One of them should provide call handling instructions.
+	Method               string `json:"method,omitempty"`           // For AnswerUrl if it's a direct webhook Agbara-Go needs to call (less likely with FS originate)
+	FallbackUrl          string `json:"fallbackUrl,omitempty"`      // Similar to above
+	FallbackMethod       string `json:"fallbackMethod,omitempty"`   // Similar to above
+	StatusCallbackUrl    string `json:"statusCallbackUrl,omitempty"` // URL to send call status events
 	StatusCallbackMethod string `json:"statusCallbackMethod,omitempty"`
-	SendDigits           string `json:"sendDigits,omitempty"`
-	TimeLimit            string `json:"timeLimit,omitempty"`    // Max duration of the call
-	HangupOnRing         string `json:"hangupOnRing,omitempty"` // "true" or "false", or int for number of rings
+	SendDigits           string `json:"sendDigits,omitempty"`       // Digits to send after call connects
+	TimeLimit            string `json:"timeLimit,omitempty"`        // Max duration (maps to Call.Timeout string)
+	HangupOnRing         string `json:"hangupOnRing,omitempty"`     // e.g., "true", "false", or number of rings
 }
+// Ensure one of ApplicationSid or AnswerUrl is effectively required by API handler logic if not by binding tags.
+// The C# had: AnswerUrl [Required(ErrorMessage = "Answer Url cannot be empty"), DataType(DataType.Url,ErrorMessage="Url Not Properly Formatted")]
+// This implies AnswerUrl was primary. If ApplicationSid is used, its VoiceUrl becomes the effective "AnswerUrl" for FreeSWITCH.
+// We can adjust binding later in API handlers if needed. For now, model reflects both.
 
-// CallResponse model (simple generic response, C# has this)
+// CallResponse (already defined, no changes needed for this step)
 type CallResponse struct {
 	Message      string `json:"message"`
 	IsSuccessful bool   `json:"isSuccessful"`
 	CallSid      string `json:"callSid,omitempty"`
 }
 
-// --- Specific Action Request/Response DTOs (defined in Phase 1, Step 2, good to have them here) ---
-// These were for deferred Call operations (Play, Record, Speak, Digit)
-
+// Other DTOs (CallPlayRequest, etc.) remain as they were.
 // CallPlayRequest model
 type CallPlayRequest struct {
-	// AccountSid, CallSid from path
 	PlayUrl string `json:"playUrl" binding:"required"`
-	Loop    string `json:"loop,omitempty"` // e.g., "1", "10", "0" for infinite
-	Legs    string `json:"legs,omitempty"` // e.g., "aleg", "bleg", "both"
+	Loop    string `json:"loop,omitempty"` 
+	Legs    string `json:"legs,omitempty"` 
 }
-
 // CallPlayResponse model
 type CallPlayResponse struct {
 	CallSid string `json:"callSid"`
-	Message string `json:"message"` // Corrected from "Mesage"
+	Message string `json:"message"` 
 }
-
-// StopCallPlayRequest model (No body, path params are enough)
-// type StopCallPlayRequest struct {}
-
-// StopCallPlayResponse model
-type StopCallPlayResponse struct {
-	CallSid string `json:"callSid"`
-	Message string `json:"message"`
-}
-
 // CallRecordRequest model
-type CallRecordRequest struct {
-	// AccountSid, CallSid from path
-	// Potentially other params like FileName, Format, MaxLength, etc.
-}
-
+type CallRecordRequest struct {}
 // CallRecordResponse model
 type CallRecordResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
-	// RecordingUrl string `json:"recordingUrl,omitempty"`
 }
-
-// StopCallRecordRequest model (No body)
-// type StopCallRecordRequest struct {}
-
-// StopCallRecordResponse model
-type StopCallRecordResponse struct {
-	Success bool   `json:"success"`
-	Message string `json:"message"`
-}
-
 // CallSpeakRequest model
 type CallSpeakRequest struct {
-	// AccountSid, CallSid from path
 	Text string `json:"text" binding:"required"`
 	Loop string `json:"loop,omitempty"`
-	// Voice, Language etc.
 }
-
 // CallSpeakResponse model
 type CallSpeakResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
 }
-
-// CallDigitRequest model (for sending DTMF)
+// CallDigitRequest model
 type CallDigitRequest struct {
-	// AccountSid, CallSid from path
 	Digits string `json:"digits" binding:"required"`
-	// ToneDuration, etc.
 }
-
 // CallDigitResponse model
 type CallDigitResponse struct {
 	Success bool   `json:"success"`

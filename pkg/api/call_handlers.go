@@ -5,20 +5,20 @@ import (
 	"agbara-go/pkg/services"
 	"database/sql" 
 	"errors"       
-	"fmt"          // Added fmt for containsSubstring helper consistency
+	"fmt"          
 	"net/http"
 	"time" 
 
 	"github.com/gin-gonic/gin"
 )
 
-// CallAPI holds handlers for call-related API endpoints.
+// CallAPI struct and NewCallAPI (ensure it's the version that accepts AccountService)
+// ... (ensure CallAPI and NewCallAPI are the version from Turn 36/38 - with accountService)
 type CallAPI struct {
 	callService    services.CallService
-	accountService services.AccountService // Added to verify account existence
+	accountService services.AccountService 
 }
 
-// NewCallAPI creates a new CallAPI instance.
 func NewCallAPI(callService services.CallService, accountService services.AccountService) *CallAPI {
 	return &CallAPI{
 		callService:    callService,
@@ -26,21 +26,15 @@ func NewCallAPI(callService services.CallService, accountService services.Accoun
 	}
 }
 
+
+// getAuthenticatedAccountSidForCall and authAndAccountCheck (ensure these are present and correct)
+// ... (ensure these helpers are the version from Turn 36/38)
 func getAuthenticatedAccountSidForCall(c *gin.Context) (string, error) {
 	authUserSid := c.GetHeader("X-Auth-User-Sid")
 	if authUserSid == "" {
 		return "", errors.New("authentication required: X-Auth-User-Sid header missing")
 	}
 	return authUserSid, nil
-}
-
-func (api *CallAPI) RegisterCallRoutes(router *gin.RouterGroup) {
-	callsRoutes := router.Group("/Calls")
-	{
-		callsRoutes.GET("", api.ListCallsHandler)
-		callsRoutes.POST("/Call", api.MakeCallHandler) 
-		callsRoutes.POST("/:callSid", api.ModifyCallHandler)
-	}
 }
 
 func (api *CallAPI) authAndAccountCheck(c *gin.Context) (string, bool) {
@@ -63,7 +57,7 @@ func (api *CallAPI) authAndAccountCheck(c *gin.Context) (string, bool) {
 
 	_, err = api.accountService.GetAccount(c.Request.Context(), pathAccountSid)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) || containsSubstring(err.Error(), "not found") { // Using containsSubstring from this version
+		if errors.Is(err, sql.ErrNoRows) || containsSubstring(err.Error(), "not found") { 
 			c.JSON(http.StatusNotFound, gin.H{"error": "Account not found"})
 		} else {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify account", "details": err.Error()})
@@ -73,6 +67,21 @@ func (api *CallAPI) authAndAccountCheck(c *gin.Context) (string, bool) {
 	return pathAccountSid, true 
 }
 
+
+// RegisterCallRoutes (ensure this is present and correct)
+// ... (ensure this is the version from Turn 36/38)
+func (api *CallAPI) RegisterCallRoutes(router *gin.RouterGroup) {
+	callsRoutes := router.Group("/Calls")
+	{
+		callsRoutes.GET("", api.ListCallsHandler)
+		callsRoutes.POST("/Call", api.MakeCallHandler) 
+		callsRoutes.POST("/:callSid", api.ModifyCallHandler)
+	}
+}
+
+
+// ListCallsHandler (ensure this is present and correct)
+// ... (ensure this is the version from Turn 36/38)
 func (api *CallAPI) ListCallsHandler(c *gin.Context) {
 	accountSid, ok := api.authAndAccountCheck(c)
 	if !ok {
@@ -90,6 +99,7 @@ func (api *CallAPI) ListCallsHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, calls)
 }
 
+// Modify MakeCallHandler
 func (api *CallAPI) MakeCallHandler(c *gin.Context) {
 	accountSid, ok := api.authAndAccountCheck(c)
 	if !ok {
@@ -102,26 +112,64 @@ func (api *CallAPI) MakeCallHandler(c *gin.Context) {
 		return
 	}
 
+	// Validation: Ensure either ApplicationSid or AnswerUrl is provided for call handling.
+	if req.ApplicationSid == "" && req.AnswerUrl == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Either applicationSid or answerUrl must be provided to handle the call."})
+		return
+	}
+    if req.ApplicationSid != "" && req.AnswerUrl != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Provide either applicationSid or answerUrl, not both."})
+		return
+	}
+
+
+	// Populate the call model for the service
 	call := &models.Call{
-		AccountSid: accountSid, 
-		CallerId:   req.From,
-		CallTo:     req.To,
-		AnswerUrl:  req.AnswerUrl,
-		Direction:  "outbound-api", 
-		Status:     models.CallStatusQueued, 
+		AccountSid:     accountSid,
+		CallerId:       req.From, // CallerId from request 'From' field
+		CallTo:         req.To,
+		ApplicationSid: req.ApplicationSid, // Pass ApplicationSid
+		AnswerUrl:      req.AnswerUrl,      // Pass AnswerUrl (service will prioritize AppSid if present)
+		Direction:      "outbound-api",
+		Status:         models.CallStatusQueued, // Initial status, service might change to Initiating quickly
+		Timeout:        req.TimeLimit,          // Pass TimeLimit as Timeout string
+		// Price and Duration will use defaults or be set by service/later actions.
+		// Timestamps (DateCreated, DateUpdated, StartTime, EndTime) handled by service.
 	}
     if call.StartTime.IsZero() { 
         call.StartTime = time.Now().UTC()
     }
-
+    
 	createdCall, err := api.callService.CreateCall(c.Request.Context(), call)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create call", "details": err.Error()})
+		// Check if the error is due to FS origination failure, which might have specific error messages
+        // The service layer now returns the call object even on FS failure, with status 'failed'.
+        if createdCall != nil && createdCall.Status == models.CallStatusFailed {
+            c.JSON(http.StatusInternalServerError, gin.H{
+                "error": "Failed to originate call via FreeSWITCH", 
+                "details": err.Error(),
+                "call_record": createdCall, // Return the created call record which includes the SID
+            })
+        } else {
+		    c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create call", "details": err.Error()})
+        }
 		return
 	}
-	c.JSON(http.StatusCreated, createdCall)
+	// If call origination was attempted and successful, status might be Ringing or InProgress.
+	// If ESL connection was nil, service returns error and call status might be Queued or Failed.
+	if createdCall.Status == models.CallStatusFailed {
+        c.JSON(http.StatusInternalServerError, gin.H{ // Or perhaps a 201 with a warning if record created but FS failed
+            "message": "Call record created but FreeSWITCH origination failed.",
+            "call": createdCall,
+            "error_details": err.Error(), // This might be nil if service handled the error message itself
+        })
+    } else {
+	    c.JSON(http.StatusCreated, createdCall)
+    }
 }
 
+// ModifyCallHandler (ensure this is present and correct, including auth check)
+// ... (ensure this is the version from Turn 36/38)
 func (api *CallAPI) ModifyCallHandler(c *gin.Context) {
 	accountSid, ok := api.authAndAccountCheck(c)
 	if !ok {
@@ -141,7 +189,7 @@ func (api *CallAPI) ModifyCallHandler(c *gin.Context) {
 
 	existingCall, err := api.callService.GetCall(c.Request.Context(), callSid)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) || containsSubstring(err.Error(), "not found") { // Using containsSubstring from this version
+		if errors.Is(err, sql.ErrNoRows) || containsSubstring(err.Error(), "not found") { 
 			c.JSON(http.StatusNotFound, gin.H{"error": "Call not found"})
 		} else {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve call for modification", "details": err.Error()})
@@ -154,9 +202,17 @@ func (api *CallAPI) ModifyCallHandler(c *gin.Context) {
 		return
 	}
 
+    // For Modify, primarily AnswerUrl was considered updatable via this generic request.
+    // ApplicationSid is usually set at creation. If it needs to change, it's a more complex operation.
 	if req.AnswerUrl != "" {
 		existingCall.AnswerUrl = req.AnswerUrl
 	}
+    if req.StatusCallbackUrl != "" {
+        // If Call model had StatusCallbackUrl, it would be updated here.
+        // existingCall.StatusCallbackUrl = req.StatusCallbackUrl
+    }
+    // Potentially update other fields if they are part of CallRequest and deemed modifiable here.
+    // e.g., if req.TimeLimit is provided, update existingCall.Timeout = req.TimeLimit
 
 	updatedCall, err := api.callService.UpdateCall(c.Request.Context(), existingCall)
 	if err != nil {
@@ -166,40 +222,22 @@ func (api *CallAPI) ModifyCallHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, updatedCall)
 }
 
-// Using the version of containsSubstring from the prompt this code is from
-func containsSubstring(s, substr string) bool {
-    // This is a simplified version. A more robust one might use strings.Contains or regexp.
-    // The version in account_handlers.go was more complex. For consistency, this should ideally be identical
-    // or replaced by a proper library function or a shared utility.
-    // For now, using a version that matches the logic from the prompt this code block is based on.
-    // This specific version might not be robust for all error wrapping scenarios.
-    // A simple direct string search might be more reliable than error re-creation for substring check.
-    // Let's use a basic string check for "not found" as an example if sql.ErrNoRows isn't matched.
-    if errText, ok := s.(string); ok { // Check if s is string
-        for _, char := range substr { // Basic check, not efficient
-            found := false
-            for _, c := range errText {
-                if c == char {
-                    found = true
-                    break
-                }
-            }
-            if !found { return false }
-        }
-        return true // Placeholder for more robust check
-    }
-    // Fallback for actual errors if s is an error type
-    if err, ok := s.(error); ok {
-       targetMsg := "not found" // Example
-       currentErr := err
-       for currentErr != nil {
-           if e, ok := currentErr.(interface{ Message() string }); ok && e.Message() == targetMsg { // Simplified check
-               return true
-           }
-           if eStr := currentErr.Error(); len(eStr) >= len(targetMsg) && eStr[len(eStr)-len(targetMsg):] == targetMsg { return true } // Suffix check
 
-           currentErr = errors.Unwrap(currentErr)
-       }
+// containsSubstring (ensure this is present and correct)
+// ... (ensure this is the version from Turn 36/38, or the one from Turn 42/44 if standardized)
+func containsSubstring(s, substr string) bool {
+    var errStr string
+    if err, ok := s.(error); ok { 
+        errStr = err.Error()
+    } else if str, ok := s.(string); ok { 
+        errStr = str
+    } else {
+        return false 
+    }
+    for i := 0; i <= len(errStr)-len(substr); i++ {
+        if errStr[i:i+len(substr)] == substr {
+            return true
+        }
     }
     return false
 }

@@ -11,6 +11,7 @@ Agbara-Go is a Golang-based RESTful API providing functionalities for managing v
 ## Prerequisites
 *   Go (version 1.19 or higher recommended)
 *   PostgreSQL database server (version 12 or higher recommended)
+*   A running and configured FreeSWITCH instance. See [FREESWITCH_GUIDE.md](./FREESWITCH_GUIDE.md) for details on required FreeSWITCH setup.
 
 ## Building the Application
 
@@ -30,6 +31,7 @@ The application is configured using environment variables:
 *   `HTTP_PORT`: Port for the HTTP server.
     *   Default: `8080`
 *   `X-Auth-User-Sid` (HTTP Header): **Placeholder for authentication.** Used by most API endpoints to identify the authenticated user/account. **This is NOT for production use.**
+*   **FreeSWITCH Connection**: Details for connecting to your FreeSWITCH instance's Event Socket Layer (ESL) will also be required (e.g., host, port, password). These will be specified via environment variables (to be detailed later).
 
 ## Database Setup
 

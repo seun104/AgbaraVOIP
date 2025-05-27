@@ -3,17 +3,21 @@ package main
 import (
 	"agbara-go/pkg/api"
 	"agbara-go/pkg/database"
+	"agbara-go/pkg/freeswitch" // <-- ADD THIS IMPORT
 	"agbara-go/pkg/services"
 	"fmt"
 	"log"
+	"net/http" // Added for health check http status codes
 	"os"
+	"strconv" // For parsing FS connection timeout and retries
+	"time"    // For FS connection timeout
 
 	"github.com/gin-gonic/gin"
 	// _ "github.com/jackc/pgx/v5/stdlib" // Usually in database/postgres.go
 )
 
 func main() {
-	// Configuration (existing)
+	// --- Configuration ---
 	dbDSN := os.Getenv("AGBARA_DB_DSN")
 	if dbDSN == "" {
 		log.Println("Warning: AGBARA_DB_DSN environment variable not set. Using default local DSN.")
@@ -25,7 +29,37 @@ func main() {
 		httpPort = "8080"
 	}
 
-	// Database Connection (existing)
+	// FreeSWITCH ESL Configuration
+	fsHost := os.Getenv("FS_HOST")
+	if fsHost == "" {
+		fsHost = "localhost"
+		log.Printf("Warning: FS_HOST not set, defaulting to %s\n", fsHost)
+	}
+	fsPort := os.Getenv("FS_PORT")
+	if fsPort == "" {
+		fsPort = "8021"
+		log.Printf("Warning: FS_PORT not set, defaulting to %s\n", fsPort)
+	}
+	fsPassword := os.Getenv("FS_PASSWORD")
+	if fsPassword == "" {
+		fsPassword = "YourESLPassword" // Change this default in production!
+		log.Printf("Warning: FS_PASSWORD not set, defaulting to a placeholder. CHANGE THIS!\n")
+	}
+    fsTimeoutSecondsStr := os.Getenv("FS_TIMEOUT_SECONDS")
+    fsTimeoutSeconds, err := strconv.Atoi(fsTimeoutSecondsStr)
+    if err != nil || fsTimeoutSeconds <= 0 {
+        fsTimeoutSeconds = 10 // Default to 10 seconds
+        log.Printf("Warning: FS_TIMEOUT_SECONDS invalid or not set, defaulting to %d seconds\n", fsTimeoutSeconds)
+    }
+    fsMaxRetriesStr := os.Getenv("FS_MAX_RETRIES")
+    fsMaxRetries, err := strconv.Atoi(fsMaxRetriesStr)
+    if err != nil || fsMaxRetries <= 0 {
+        fsMaxRetries = 3 // Default to 3 retries
+        log.Printf("Warning: FS_MAX_RETRIES invalid or not set, defaulting to %d\n", fsMaxRetries)
+    }
+
+
+	// --- Database Connection ---
 	db, err := database.ConnectDB(dbDSN)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
@@ -33,47 +67,64 @@ func main() {
 	defer db.Close()
 	log.Println("Successfully connected to the database.")
 
-	// Initialize Services
-	accountService := services.NewPostgresAccountService(db) 
-	callService := services.NewPostgresCallService(db)
-	conferenceService := services.NewPostgresConferenceService(db)
-	applicationService := services.NewPostgresApplicationService(db) // <-- ADD THIS
+	// --- FreeSWITCH ESL Connection ---
+	eslConn, err := freeswitch.NewESLConnection(fsHost, fsPort, fsPassword, time.Duration(fsTimeoutSeconds)*time.Second, fsMaxRetries)
+	if err != nil {
+		// Log as fatal if ESL connection is critical for startup,
+		// or log as warning if application can run with limited functionality.
+		// For call origination, it's likely critical.
+		log.Fatalf("Failed to connect to FreeSWITCH ESL: %v. Ensure FreeSWITCH is running and configured.", err)
+	}
+	defer eslConn.Close() // Ensure ESL connection is closed when main exits
 
-	// Initialize API Handlers
+
+	// --- Initialize Services ---
+	accountService := services.NewPostgresAccountService(db)
+	// Pass eslConn to NewPostgresCallService
+	callService := services.NewPostgresCallService(db, eslConn) // <-- MODIFIED HERE
+	conferenceService := services.NewPostgresConferenceService(db) // Does not use ESL directly yet
+	applicationService := services.NewPostgresApplicationService(db)
+
+	// --- Initialize API Handlers ---
 	callAPI := api.NewCallAPI(callService, accountService)
 	accountAPI := api.NewAccountAPI(accountService)
 	conferenceAPI := api.NewConferenceAPI(conferenceService, accountService)
-	applicationAPI := api.NewApplicationAPI(applicationService, accountService) // <-- ADD THIS
+	applicationAPI := api.NewApplicationAPI(applicationService, accountService)
 
-	// Setup Gin Router (existing)
+	// --- Setup Gin Router ---
 	router := gin.Default()
-
-    // Health check endpoint (existing)
     router.GET("/health", func(c *gin.Context) {
-        err := db.Ping()
-        if err != nil {
-            c.JSON(503, gin.H{"status": "error", "db_status": "unhealthy", "details": err.Error()})
-            return
+        // DB Health
+        dbErr := db.Ping()
+        // FS Health (optional: add a simple status check if ESLConnection provides one)
+        // fsHealthy := eslConn.IsConnected() // Hypothetical method
+        
+        healthStatus := gin.H{"status": "ok", "database": "healthy"}
+        httpCode := http.StatusOK
+        if dbErr != nil {
+            healthStatus["database"] = "unhealthy"
+            healthStatus["status"] = "error"
+            healthStatus["db_details"] = dbErr.Error()
+            httpCode = http.StatusServiceUnavailable
         }
-        c.JSON(200, gin.H{"status": "ok", "db_status": "healthy"})
+        // if !fsHealthy { // If we had fsHealthy check
+        //     healthStatus["freeswitch_esl"] = "unhealthy"
+        //     healthStatus["status"] = "error"
+        //     httpCode = http.StatusServiceUnavailable
+        // }
+        c.JSON(httpCode, healthStatus)
     })
 
-	// Register API routes
 	apiV1 := router.Group("/api/v1")
-	
-	// Account routes (e.g., /api/v1/Accounts, /api/v1/Accounts/:accountSid, etc.)
 	accountAPI.RegisterAccountRoutes(apiV1)
-
-	// Account-specific resource routes (Calls, Conferences, Applications)
-	// These are nested under /Accounts/:accountSidInPath
 	accountSpecificGroup := apiV1.Group("/Accounts/:accountSidInPath")
 	{
 		callAPI.RegisterCallRoutes(accountSpecificGroup)
 		conferenceAPI.RegisterConferenceRoutes(accountSpecificGroup)
-		applicationAPI.RegisterApplicationRoutes(accountSpecificGroup) // <-- ADD THIS
+		applicationAPI.RegisterApplicationRoutes(accountSpecificGroup)
 	}
 
-	// Start HTTP Server (existing)
+	// --- Start HTTP Server ---
 	serverAddr := fmt.Sprintf(":%s", httpPort)
 	log.Printf("Starting server on %s", serverAddr)
 	if err := router.Run(serverAddr); err != nil {

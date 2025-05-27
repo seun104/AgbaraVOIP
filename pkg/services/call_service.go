@@ -1,255 +1,278 @@
 package services
 
 import (
+	"agbara-go/pkg/freeswitch" // New import
 	"agbara-go/pkg/models"
 	"context"
 	"database/sql"
-	"fmt" // For error wrapping
-	"strconv" // Added import for strconv
+	"fmt"
+	"log"     // Added for logging
+	"strconv"
+	"strings" // For dial string construction
 	"time"
 
 	"github.com/google/uuid"
-	// "errors" // For sql.ErrNoRows comparison if needed explicitly
 )
 
-// CallService defines the interface for call operations.
-type CallService interface {
-	CreateCall(ctx context.Context, call *models.Call) (*models.Call, error)
-	UpdateCallStatus(ctx context.Context, callSid string, status string) (*models.Call, error)
-	UpdateCall(ctx context.Context, call *models.Call) (*models.Call, error)
-	GetCall(ctx context.Context, callSid string) (*models.Call, error)
-	ListCalls(ctx context.Context, accountSid string) ([]*models.Call, error)
-}
+// CallService interface (ensure it matches what API handlers expect)
+// No changes needed to the interface itself for this step if CreateCall still takes models.Call.
 
-// PostgresCallService implements CallService for PostgreSQL
+// Update PostgresCallService struct
 type PostgresCallService struct {
-	db *sql.DB
+	db      *sql.DB
+	eslConn *freeswitch.ESLConnection // Added ESL connection
 }
 
-// NewPostgresCallService creates a new PostgresCallService
-func NewPostgresCallService(db *sql.DB) *PostgresCallService {
-	return &PostgresCallService{db: db}
+// Update NewPostgresCallService constructor
+func NewPostgresCallService(db *sql.DB, eslConn *freeswitch.ESLConnection) *PostgresCallService {
+	return &PostgresCallService{db: db, eslConn: eslConn}
 }
 
-// CreateCall adds a new call log to the PostgreSQL database
+// scanCall (from existing call_service.go, ensure it includes FreeswitchCallID)
+func scanCall(scanner interface{ Scan(...interface{}) error }) (*models.Call, error) {
+	call := &models.Call{}
+	var timeoutSeconds sql.NullInt64
+	var answeredBy sql.NullString
+	var endTime sql.NullTime
+	var fsCallID sql.NullString // For freeswitch_call_id
+
+	// Ensure the order of scan matches the SELECT query columns
+	err := scanner.Scan(
+		&call.Sid, &call.AccountSid, &call.CallerId, &call.CallTo, &call.AnswerUrl, &call.Status,
+		&timeoutSeconds, &call.Direction, &call.Duration, &call.Price,
+		&call.StartTime, &endTime, &call.DateCreated, &call.DateUpdated, &answeredBy,
+		&fsCallID, // Scan the new field
+	)
+	if err != nil {
+		return nil, err
+	}
+	if timeoutSeconds.Valid {
+		call.Timeout = fmt.Sprintf("%d", timeoutSeconds.Int64)
+	} else {
+		call.Timeout = ""
+	}
+	call.AnsweredBy = answeredBy.String
+	if endTime.Valid {
+		call.EndTime = endTime.Time
+	} else {
+		call.EndTime = time.Time{}
+	} // Set to zero if NULL
+	call.FreeswitchCallID = fsCallID.String
+	return call, nil
+}
+
+// CreateCall now also originates the call via FreeSWITCH.
 func (s *PostgresCallService) CreateCall(ctx context.Context, call *models.Call) (*models.Call, error) {
-	call.Sid = "CA" + uuid.NewString() // Generate SID
-	call.Status = "queued"            // Default status
+	call.Sid = "CA" + uuid.NewString()
+	// Initial status before attempting FreeSWITCH origination
+	call.Status = models.CallStatusQueued // Or a new "initiating" status
 	now := time.Now().UTC()
 	call.DateCreated = now
 	call.DateUpdated = now
-    if call.StartTime.IsZero() {
-        call.StartTime = now
-    }
-    // Ensure EndTime is not before StartTime if both are set or defaulted.
-    // If EndTime is zero and StartTime is set, it might be okay to leave EndTime as zero
-    // or set it to StartTime depending on business logic (e.g., for very short/instantaneous events).
-    // The provided C# code sets EndTime = StartTime if EndTime is not provided.
-    if call.EndTime.IsZero() && !call.StartTime.IsZero() {
-        call.EndTime = call.StartTime 
-    }
+	if call.StartTime.IsZero() {
+		call.StartTime = now
+	}
+	// EndTime remains zero until call ends. sql.NullTime handles DB NULL.
 
+	var timeoutSeconds sql.NullInt64
+	if call.Timeout != "" {
+		if parsedTimeout, err := strconv.ParseInt(call.Timeout, 10, 64); err == nil {
+			timeoutSeconds.Int64 = parsedTimeout
+			timeoutSeconds.Valid = true
+		}
+		// else: invalid timeout string, will be inserted as NULL
+	}
 
-    // Convert call.Timeout string to sql.NullInt64 for DB insert
-    var timeoutSeconds sql.NullInt64
-    if call.Timeout != "" {
-        if parsedTimeout, err := strconv.ParseInt(call.Timeout, 10, 64); err == nil {
-            timeoutSeconds.Int64 = parsedTimeout
-            timeoutSeconds.Valid = true
-        } else {
-            // Optionally handle error if Timeout string is not a valid int
-            // For now, if it's not a valid int, it will be inserted as NULL (as timeoutSeconds.Valid remains false)
-            // return nil, fmt.Errorf("invalid Timeout value in CreateCall: %s: %w", call.Timeout, err)
-        }
-    }
-
-	query := `
+	// 1. Insert initial call record into the database
+	insertQuery := `
 		INSERT INTO calls (
 			sid, account_sid, caller_id, call_to, answer_url, status, 
 			direction, duration_seconds, price, start_time, end_time, 
-			date_created, date_updated, answered_by, timeout_seconds
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-		RETURNING date_created, date_updated, start_time, end_time; 
+			date_created, date_updated, answered_by, timeout_seconds, freeswitch_call_id 
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NULL)
+		RETURNING date_created, date_updated, start_time; 
 	`
-    // Note: The RETURNING clause might need to return more fields if the DB auto-generates/modifies them
-    // and you need those values back in the `call` struct immediately.
-    // For instance, if start_time or end_time had defaults in the DB triggered by NULL inputs.
-    // Given the current logic, DateCreated, DateUpdated, StartTime, EndTime are explicitly set before insert.
-	err := s.db.QueryRowContext(ctx, query,
+	err := s.db.QueryRowContext(ctx, insertQuery,
 		call.Sid, call.AccountSid, call.CallerId, call.CallTo, call.AnswerUrl, call.Status,
-		call.Direction, call.Duration, call.Price, call.StartTime, call.EndTime,
-		call.DateCreated, call.DateUpdated, call.AnsweredBy, timeoutSeconds, // Added timeoutSeconds
-	).Scan(&call.DateCreated, &call.DateUpdated, &call.StartTime, &call.EndTime)
+		call.Direction, call.Duration, call.Price, call.StartTime, sql.NullTime{Time: call.EndTime, Valid: !call.EndTime.IsZero()},
+		call.DateCreated, call.DateUpdated, sql.NullString{String: call.AnsweredBy, Valid: call.AnsweredBy != ""},
+		timeoutSeconds,
+	).Scan(&call.DateCreated, &call.DateUpdated, &call.StartTime)
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to insert call: %w", err)
+		return nil, fmt.Errorf("failed to insert initial call record: %w", err)
 	}
-	return call, nil
-}
 
-// GetCall retrieves a call by its SID
-func (s *PostgresCallService) GetCall(ctx context.Context, callSid string) (*models.Call, error) {
-	query := `
-		SELECT sid, account_sid, caller_id, call_to, answer_url, status, 
-		       timeout_seconds, direction, duration_seconds, price, 
-		       start_time, end_time, date_created, date_updated, answered_by
-		FROM calls WHERE sid = $1;
-	`
-	row := s.db.QueryRowContext(ctx, query, callSid)
-	call := &models.Call{}
-    var timeoutSeconds sql.NullInt64 
-
-	err := row.Scan(
-		&call.Sid, &call.AccountSid, &call.CallerId, &call.CallTo, &call.AnswerUrl, &call.Status,
-		&timeoutSeconds, &call.Direction, &call.Duration, &call.Price,
-		&call.StartTime, &call.EndTime, &call.DateCreated, &call.DateUpdated, &call.AnsweredBy,
-	)
-
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("call with SID %s not found: %w", callSid, err)
+	// 2. Originate call via FreeSWITCH
+	if s.eslConn == nil {
+		log.Printf("WARN: ESLConnection is nil for call %s. Skipping FreeSWITCH origination.", call.Sid)
+		call.Status = models.CallStatusFailed
+		// Update the DB record with this failure status
+		updatedCallWithFailure, updateErr := s.UpdateCall(ctx, call) // UpdateCall updates status and other fields
+		if updateErr != nil {
+			// Log the error of updating the call status, but return the original error about ESL connection
+			log.Printf("ERROR: Failed to update call %s status after ESL connection error: %v", call.Sid, updateErr)
+			return call, fmt.Errorf("ESL connection not available, FreeSWITCH origination skipped for call %s (DB update for failure also failed: %w)", call.Sid, updateErr)
 		}
-		return nil, fmt.Errorf("failed to get call: %w", err)
+		return updatedCallWithFailure, fmt.Errorf("ESL connection not available, FreeSWITCH origination skipped for call %s", call.Sid)
 	}
-    if timeoutSeconds.Valid {
-        call.Timeout = fmt.Sprintf("%d", timeoutSeconds.Int64) 
-    } else {
-        call.Timeout = "" 
-    }
-	return call, nil
-}
 
-// ListCalls retrieves all calls for a given AccountSid
-func (s *PostgresCallService) ListCalls(ctx context.Context, accountSid string) ([]*models.Call, error) {
-	query := `
-		SELECT sid, account_sid, caller_id, call_to, answer_url, status, 
-		       timeout_seconds, direction, duration_seconds, price, 
-		       start_time, end_time, date_created, date_updated, answered_by
-		FROM calls WHERE account_sid = $1 ORDER BY date_created DESC;
-	`
-	rows, err := s.db.QueryContext(ctx, query, accountSid)
+	callerIDName := call.CallerId
+	callerIDNumber := call.CallerId
+	if strings.Contains(call.CallerId, "<") && strings.HasSuffix(call.CallerId, ">") {
+		parts := strings.SplitN(call.CallerId, "<", 2)
+		callerIDName = strings.TrimSpace(parts[0])
+		callerIDNumber = strings.TrimSuffix(strings.TrimSpace(parts[1]), ">")
+	}
+
+	originateVars := fmt.Sprintf("{agbara_call_sid=%s,agbara_account_sid=%s,origination_caller_id_name='%s',origination_caller_id_number='%s'}",
+		call.Sid, call.AccountSid, callerIDName, callerIDNumber)
+
+	// Assuming call.To is the destination and call.AnswerUrl is the application string
+	// This needs to be configured properly in FreeSWITCH (e.g., dialplan, gateway)
+	// Example: "sofia/gateway/my_gateway/" + call.To
+	// For now, using a generic format that implies call.To is a full target string for originate
+	dialString := fmt.Sprintf("%s%s %s", originateVars, call.To, call.AnswerUrl)
+
+	log.Printf("Attempting to originate call %s with dial string: %s\n", call.Sid, dialString)
+
+	fsCallID, err := s.eslConn.SendBgApiCommand("originate", dialString)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query calls: %w", err)
-	}
-	defer rows.Close()
-
-	var calls []*models.Call
-	for rows.Next() {
-		call := &models.Call{}
-        var timeoutSeconds sql.NullInt64
-		if err := rows.Scan(
-			&call.Sid, &call.AccountSid, &call.CallerId, &call.CallTo, &call.AnswerUrl, &call.Status,
-			&timeoutSeconds, &call.Direction, &call.Duration, &call.Price,
-			&call.StartTime, &call.EndTime, &call.DateCreated, &call.DateUpdated, &call.AnsweredBy,
-		); err != nil {
-			// If a single row scan fails, we return error immediately.
-			// Depending on requirements, one might choose to log and skip, or collect errors.
-			return nil, fmt.Errorf("failed to scan call row: %w", err) 
+		log.Printf("ERROR: FreeSWITCH origination failed for call %s: %v\n", call.Sid, err)
+		call.Status = models.CallStatusFailed
+		updatedCallWithFailure, updateErr := s.UpdateCall(ctx, call)
+		if updateErr != nil {
+			log.Printf("ERROR: Failed to update call %s status after origination failure: %v\n", call.Sid, updateErr)
 		}
-        if timeoutSeconds.Valid {
-            call.Timeout = fmt.Sprintf("%d", timeoutSeconds.Int64)
-        } else {
-            call.Timeout = ""
-        }
-		calls = append(calls, call)
+		// Return the call object with the "failed" status, even if DB update failed, along with the primary error
+		return updatedCallWithFailure, fmt.Errorf("FreeSWITCH origination command failed for call %s: %w", call.Sid, err)
 	}
 
-	if err = rows.Err(); err != nil { // Check for errors encountered during iteration
-		return nil, fmt.Errorf("error iterating call rows: %w", err)
-	}
-    if calls == nil { // Ensure empty slice is returned, not nil, if query returned no rows
-        calls = []*models.Call{}
-    }
-	return calls, nil
-}
+	log.Printf("FreeSWITCH origination successful for call %s. Job UUID: %s\n", call.Sid, fsCallID)
+	call.FreeswitchCallID = fsCallID
+	call.Status = models.CallStatusRinging // Or another appropriate status post-originate
 
-// UpdateCallStatus updates the status of a call and its DateUpdated timestamp
-func (s *PostgresCallService) UpdateCallStatus(ctx context.Context, callSid string, status string) (*models.Call, error) {
-	query := `
-		UPDATE calls SET status = $1, date_updated = $2
-		WHERE sid = $3
-		RETURNING sid, account_sid, caller_id, call_to, answer_url, status, 
-		          timeout_seconds, direction, duration_seconds, price, 
-		          start_time, end_time, date_created, date_updated, answered_by;
-	`
-	now := time.Now().UTC()
-	row := s.db.QueryRowContext(ctx, query, status, now, callSid)
-	
-	updatedCall := &models.Call{}
-    var timeoutSeconds sql.NullInt64 // For scanning the timeout_seconds from RETURNING
-	err := row.Scan(
-		&updatedCall.Sid, &updatedCall.AccountSid, &updatedCall.CallerId, &updatedCall.CallTo, 
-		&updatedCall.AnswerUrl, &updatedCall.Status, &timeoutSeconds, &updatedCall.Direction, 
-		&updatedCall.Duration, &updatedCall.Price, &updatedCall.StartTime, &updatedCall.EndTime, 
-		&updatedCall.DateCreated, &updatedCall.DateUpdated, &updatedCall.AnsweredBy,
-	)
+	// Update the call record in DB with FreeswitchCallID and new status
+	updatedCall, err := s.UpdateCall(ctx, call)
 	if err != nil {
-		if err == sql.ErrNoRows { // Check if the specific SID was not found for update
-			return nil, fmt.Errorf("call with SID %s not found for status update: %w", callSid, err)
-		}
-		return nil, fmt.Errorf("failed to update call status: %w", err)
+		log.Printf("ERROR: Failed to update call %s with FreeswitchCallID %s: %v\n", call.Sid, fsCallID, err)
+		// Call was originated, but DB update failed. This is a critical state.
+		// Return the call object with FS ID and status, but also the error.
+		return call, fmt.Errorf("failed to update call record with Freeswitch ID after successful origination: %w", err)
 	}
-    if timeoutSeconds.Valid { // Convert scanned timeout_seconds back to string
-        updatedCall.Timeout = fmt.Sprintf("%d", timeoutSeconds.Int64)
-    } else {
-        updatedCall.Timeout = ""
-    }
+
 	return updatedCall, nil
 }
 
-// UpdateCall updates specified fields of an existing call.
+// UpdateCall needs to handle FreeswitchCallID
 func (s *PostgresCallService) UpdateCall(ctx context.Context, call *models.Call) (*models.Call, error) {
-	call.DateUpdated = time.Now().UTC() // Always update the DateUpdated timestamp
-	
-    var timeoutSeconds sql.NullInt64 // For converting string Timeout to sql.NullInt64 for DB
-    if call.Timeout != "" {
-        if parsedTimeout, err := strconv.ParseInt(call.Timeout, 10, 64); err == nil {
-            timeoutSeconds.Int64 = parsedTimeout
-            timeoutSeconds.Valid = true
-        } else {
-            // Optionally return an error if Timeout is non-empty but invalid
-            // return nil, fmt.Errorf("invalid Timeout value in UpdateCall: %s: %w", call.Timeout, err)
-            // If not returning error, invalid string Timeout means NULL will be written for timeout_seconds
-        }
-    }
+	call.DateUpdated = time.Now().UTC()
+
+	var timeoutSeconds sql.NullInt64
+	if call.Timeout != "" {
+		if parsedTimeout, err := strconv.ParseInt(call.Timeout, 10, 64); err == nil {
+			timeoutSeconds.Int64 = parsedTimeout
+			timeoutSeconds.Valid = true
+		}
+	}
+	var fsCallID sql.NullString
+	if call.FreeswitchCallID != "" {
+		fsCallID.String = call.FreeswitchCallID
+		fsCallID.Valid = true
+	}
 
 	query := `
 		UPDATE calls SET
 			account_sid = $1, caller_id = $2, call_to = $3, answer_url = $4, status = $5,
 			timeout_seconds = $6, direction = $7, duration_seconds = $8, price = $9,
-			start_time = $10, end_time = $11, date_updated = $12, answered_by = $13
-		WHERE sid = $14
+			start_time = $10, end_time = $11, date_updated = $12, answered_by = $13,
+            freeswitch_call_id = $14 
+		WHERE sid = $15
 		RETURNING sid, account_sid, caller_id, call_to, answer_url, status, 
 		          timeout_seconds, direction, duration_seconds, price, 
-		          start_time, end_time, date_created, date_updated, answered_by;
+		          start_time, end_time, date_created, date_updated, answered_by, freeswitch_call_id;
 	`
 	row := s.db.QueryRowContext(ctx, query,
 		call.AccountSid, call.CallerId, call.CallTo, call.AnswerUrl, call.Status,
-		timeoutSeconds, // Use the sql.NullInt64 version for the DB
-        call.Direction, call.Duration, call.Price,
-		call.StartTime, call.EndTime, call.DateUpdated, call.AnsweredBy,
-		call.Sid, // This is for the WHERE clause
+		timeoutSeconds, call.Direction, call.Duration, call.Price,
+		call.StartTime, sql.NullTime{Time: call.EndTime, Valid: !call.EndTime.IsZero()},
+		call.DateUpdated, sql.NullString{String: call.AnsweredBy, Valid: call.AnsweredBy != ""},
+		fsCallID, // Pass the new field
+		call.Sid,
 	)
+	return scanCall(row)
+}
 
-	updatedCall := &models.Call{}
-    var scannedTimeoutSeconds sql.NullInt64 // For scanning the timeout_seconds from RETURNING
-	err := row.Scan(
-		&updatedCall.Sid, &updatedCall.AccountSid, &updatedCall.CallerId, &updatedCall.CallTo, 
-		&updatedCall.AnswerUrl, &updatedCall.Status, &scannedTimeoutSeconds, &updatedCall.Direction, 
-		&updatedCall.Duration, &updatedCall.Price, &updatedCall.StartTime, &updatedCall.EndTime, 
-		&updatedCall.DateCreated, &updatedCall.DateUpdated, &updatedCall.AnsweredBy,
-	)
-
+// GetCall retrieves a call by its SID.
+func (s *PostgresCallService) GetCall(ctx context.Context, callSid string) (*models.Call, error) {
+	query := `
+		SELECT sid, account_sid, caller_id, call_to, answer_url, status, 
+		       timeout_seconds, direction, duration_seconds, price, 
+		       start_time, end_time, date_created, date_updated, answered_by, freeswitch_call_id
+		FROM calls WHERE sid = $1;
+	`
+	row := s.db.QueryRowContext(ctx, query, callSid)
+	call, err := scanCall(row)
 	if err != nil {
-		if err == sql.ErrNoRows { // Check if the specific SID was not found for update
-			return nil, fmt.Errorf("call with SID %s not found for update: %w", call.Sid, err)
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("call with SID %s not found: %w", callSid, err)
 		}
-		return nil, fmt.Errorf("failed to update call: %w", err)
+		return nil, fmt.Errorf("failed to get call %s: %w", callSid, err)
 	}
-    if scannedTimeoutSeconds.Valid { // Convert scanned timeout_seconds back to string for the returned model
-        updatedCall.Timeout = fmt.Sprintf("%d", scannedTimeoutSeconds.Int64)
-    } else {
-        updatedCall.Timeout = ""
-    }
+	return call, nil
+}
+
+// ListCalls retrieves all calls for a given AccountSid.
+func (s *PostgresCallService) ListCalls(ctx context.Context, accountSid string) ([]*models.Call, error) {
+	query := `
+		SELECT sid, account_sid, caller_id, call_to, answer_url, status, 
+		       timeout_seconds, direction, duration_seconds, price, 
+		       start_time, end_time, date_created, date_updated, answered_by, freeswitch_call_id
+		FROM calls WHERE account_sid = $1 ORDER BY date_created DESC;
+	`
+	rows, err := s.db.QueryContext(ctx, query, accountSid)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query calls for account %s: %w", accountSid, err)
+	}
+	defer rows.Close()
+
+	var calls []*models.Call
+	for rows.Next() {
+		call, err := scanCall(rows)
+		if err != nil {
+			// Log the error and continue? Or return immediately?
+			// For now, return immediately.
+			return nil, fmt.Errorf("failed to scan call row during ListCalls: %w", err)
+		}
+		calls = append(calls, call)
+	}
+	if err = rows.Err(); err != nil { // Check for errors encountered during iteration.
+		return nil, fmt.Errorf("error iterating call rows for account %s: %w", accountSid, err)
+	}
+	if calls == nil { // Ensure empty slice is returned, not nil, if query returned no rows
+		calls = []*models.Call{}
+	}
+	return calls, nil
+}
+
+// UpdateCallStatus updates the status of a call and its DateUpdated timestamp.
+func (s *PostgresCallService) UpdateCallStatus(ctx context.Context, callSid string, status models.CallStatus) (*models.Call, error) {
+	query := `
+		UPDATE calls SET status = $1, date_updated = $2
+		WHERE sid = $3
+		RETURNING sid, account_sid, caller_id, call_to, answer_url, status, 
+		          timeout_seconds, direction, duration_seconds, price, 
+		          start_time, end_time, date_created, date_updated, answered_by, freeswitch_call_id;
+	`
+	now := time.Now().UTC()
+	row := s.db.QueryRowContext(ctx, query, status, now, callSid)
+
+	updatedCall, err := scanCall(row)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("call with SID %s not found for status update: %w", callSid, err)
+		}
+		return nil, fmt.Errorf("failed to update call status for SID %s: %w", callSid, err)
+	}
 	return updatedCall, nil
 }
