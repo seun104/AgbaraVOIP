@@ -28,7 +28,7 @@ For Agbara-Go to connect and interact with your FreeSWITCH server, ensure the fo
     *   The `listen-ip`, `listen-port`, and `password` will be needed for Agbara-Go's configuration.
 
 2.  **Dialplan Considerations (for Call Origination via `AnswerUrl`):**
-    *   When Agbara-Go originates a call using an `AnswerUrl` from a `CallRequest`, this URL often translates to an instruction for FreeSWITCH on how to handle the call once the called party answers.
+    *   When Agbara-Go originates a call using an `AnswerUrl` from a `CallRequest` that is *not* an HTTP URL (i.e., it's a direct FreeSWITCH application string or dialplan target), this URL translates to an instruction for FreeSWITCH on how to handle the call once the called party answers.
     *   For initial testing and basic operation, you might need a dialplan context that can:
         *   Route calls to external gateways or SIP users.
         *   Execute simple applications like `echo()`, `playback(...)`, or `hangup()`.
@@ -46,7 +46,7 @@ For Agbara-Go to connect and interact with your FreeSWITCH server, ensure the fo
         In this case, `AnswerUrl` in Agbara-Go could be something like `echo_test` (if your originate dialstring targets the public context implicitly or explicitly).
 
 3.  **Outbound Call Configuration (SIP Profiles/Gateways):**
-    *   If you intend for Agbara-Go to originate calls to actual phone numbers (PSTN) or SIP URIs, your FreeSWITCH instance must have correctly configured SIP profiles and gateways. This is standard FreeSWITCH setup.
+    *   If you intend for Agbara-Go to originate calls to actual phone numbers (PSTN) or SIP URIs, your FreeSWITCH instance must have correctly configured SIP profiles and gateways. This is standard FreeSWITCH setup. See "Gateway Configuration for Outbound Calls" section below for more.
 
 4.  **Firewall:**
     *   Ensure your firewall allows Agbara-Go to connect to the FreeSWITCH ESL port (e.g., 8021).
@@ -59,87 +59,66 @@ Refer to the main `README.md` for Agbara-Go specific configuration.
 
 For advanced call handling, Agbara-Go can respond with TwiML-like XML instructions to control the call flow in FreeSWITCH. This requires FreeSWITCH to make HTTP requests to specific endpoints in the Agbara-Go application when certain call events occur (e.g., when a call is answered, or after collecting digits).
 
-Agbara-Go's `Application.VoiceUrl` will typically define the endpoint that FreeSWITCH should query.
-
-There are several ways to configure FreeSWITCH to make these HTTP requests:
+Agbara-Go's `Application.VoiceUrl` (when it's an HTTP URL) typically defines the endpoint that FreeSWITCH should query. The primary way Agbara-Go expects FreeSWITCH to invoke these TwiML endpoints is via a Lua script.
 
 ### 1. Using Lua with `htcache` or `socket.http` (Recommended for Flexibility)
 
-This is a highly flexible method. You can create a Lua script that FreeSWITCH executes as part of the dialplan. This script then makes an HTTP request to Agbara-Go's `Application.VoiceUrl`, potentially passing call-specific variables.
+This is a highly flexible method. You can create a Lua script (e.g., `handle_agbara_voiceurl.lua`) that FreeSWITCH executes as part of the dialplan. This script then makes an HTTP request to Agbara-Go's `Application.VoiceUrl`, passing call-specific variables.
 
-**Example Lua Script (`agbara_http_call_control.lua` - place in FreeSWITCH scripts directory):**
+**Example Lua Script (`handle_agbara_voiceurl.lua` - place in FreeSWITCH scripts directory):**
 ```lua
--- agbara_http_call_control.lua
-local url = argv[1]      -- URL passed from dialplan (Application.VoiceUrl)
-local call_uuid = argv[2]  -- Channel UUID
-local account_sid = argv[3] -- Account SID
--- Add any other relevant session variables you want to pass
+-- handle_agbara_voiceurl.lua
+-- Expected arguments from FreeSWITCH dialplan (set by Agbara-Go's originate command):
+local app_voice_url = argv[1]   -- The Application.VoiceUrl from Agbara-Go
+local call_uuid = argv[2]     -- FreeSWITCH Channel UUID (session.uuid)
+local agbara_account_sid = argv[3] -- Agbara Account SID
+local agbara_app_sid = argv[4]   -- Agbara Application SID
 
-if not url or not call_uuid then
-  freeswitch.consoleLog("ERR", "Lua: Missing URL or CallUUID for HTTP call control.\n")
-  session:hangup("LUASCRIPT_ERROR")
+if not app_voice_url or not call_uuid or not agbara_account_sid then
+  freeswitch.consoleLog("ERR", "Lua (handle_agbara_voiceurl): Missing required arguments: app_voice_url, call_uuid, or agbara_account_sid.\n")
+  session:hangup("LUASCRIPT_ARG_ERROR")
   return
 end
 
--- Construct query parameters
-local params = "CallSid=" .. call_uuid .. "&AccountSid=" .. account_sid
--- Add more params: From, To, Digits (if any), etc.
+-- Construct query parameters to send to Agbara-Go
+local params = "CallSid=" .. call_uuid .. "&AccountSid=" .. agbara_account_sid
+if agbara_app_sid then
+  params = params .. "&ApplicationSid=" .. agbara_app_sid
+end
+-- You can add more session variables if your Agbara-Go endpoint needs them:
 -- local from_num = session:getVariable("caller_id_number")
 -- params = params .. "&From=" .. from_num
+-- local to_num = session:getVariable("destination_number")
+-- params = params .. "&To=" .. to_num
 
-local full_url = url
-if string.find(url, "?") then
-  full_url = url .. "&" .. params
+local full_url = app_voice_url
+if string.find(app_voice_url, "?") then
+  full_url = app_voice_url .. "&" .. params
 else
-  full_url = url .. "?" .. params
+  full_url = app_voice_url .. "?" .. params
 end
 
-freeswitch.consoleLog("INFO", "Lua: Requesting call control from Agbara-Go: " .. full_url .. "\n")
+freeswitch.consoleLog("INFO", "Lua (handle_agbara_voiceurl): Requesting call control from Agbara-Go: " .. full_url .. "\n")
 
--- Use FreeSWITCH's htcache for HTTP GET (POST might need luasocket or external curl)
--- For POST or more complex requests, luasocket.http is an option if available.
--- Or, use os.execute("curl ...") if curl is installed and security allows.
-local http_request = फ्रीस्विच. एफएसएपीआई("htcache", full_url) -- htcache is simpler for GET
+-- Using htcache for GET. For POST, consider luasocket.http or os.execute("curl ...")
+local http_response_body = फ्रीस्विच. एफएसएपीआई("htcache", full_url)
 
-if http_request and string.sub(http_request, 1, 3) ~= "-OK" then
-  -- htcache returns "-OK <body/filepath>" on success, or error string
-  -- If it returns the body directly and it's XML:
-  -- freeswitch.consoleLog("INFO", "Lua: Received XML from Agbara-Go:\n" .. http_request .. "\n")
-  -- session:execute("execute_xml_dialplan", http_request) -- If XML is directly executable dialplan
-  
-  -- A common pattern is htcache downloads to a file, then you parse/execute from file.
-  -- For simplicity, let's assume Agbara-Go returns XML that can be directly executed or
-  -- that your dialplan logic after this script handles the response.
-  -- If Agbara-Go returns TwiML, you'd need a TwiML-to-FreeSWITCH dialplan converter or specific apps.
-  
-  -- For this example, we'll assume the response is directly executable XML dialplan snippet.
-  -- This part is simplified. Real TwiML processing is more involved.
-  if string.find(http_request, "<document") then -- Basic check for XML
-    session:execute("execute_xml_dialplan", http_request)
-  else
-    freeswitch.consoleLog("ERR", "Lua: Failed to fetch or invalid XML from Agbara-Go: " .. http_request .. "\n")
-    session:hangup("LUASCRIPT_HTTP_FETCH_FAILED")
-  end
+if http_response_body and not string.find(http_response_body, "^-ERR") and string.find(http_response_body, "<Response") then
+  freeswitch.consoleLog("INFO", "Lua (handle_agbara_voiceurl): Received TwiML from Agbara-Go. Executing.\n" .. http_response_body .. "\n")
+  session:execute("execute_xml_dialplan", http_response_body)
 else
-  freeswitch.consoleLog("ERR", "Lua: htcache command failed or no response for " .. full_url .. "\n")
-  session:hangup("LUASCRIPT_HTCACHE_ERROR")
+  freeswitch.consoleLog("ERR", "Lua (handle_agbara_voiceurl): Failed to fetch or invalid TwiML/XML from Agbara-Go. Response: " .. (http_response_body or "NO_RESPONSE") .. "\n")
+  session:hangup("LUASCRIPT_HTTP_FETCH_FAILED")
 end
 ```
 
-**Example Dialplan (e.g., in `conf/dialplan/default.xml` or a custom context):**
-This dialplan extension would be targeted by the `originate` command from Agbara-Go.
-```xml
-<extension name="agbara_call_handler">
-  <condition field="destination_number" expression="^(your_agbara_app_trigger_number)$">
-    <action application="answer"/>
-    <action application="set" data="agbara_account_sid=${account_sid}"/> <!-- Get from channel var if set by originate -->
-    <action application="set" data="agbara_application_voice_url=${application_voice_url}"/> <!-- Set by originate -->
-    <action application="lua" data="agbara_http_call_control.lua ${agbara_application_voice_url} ${uuid} ${agbara_account_sid}"/>
-    <action application="hangup"/> <!-- Default hangup if Lua script doesn't take over fully -->
-  </condition>
-</extension>
-```
-When Agbara-Go originates a call, it would set channel variables like `agbara_application_voice_url` and `agbara_account_sid`, and the dial string would target this extension.
+**Invocation from Dialplan (via Agbara-Go's `CallService`):**
+When Agbara-Go originates a call for an Application that has an HTTP `VoiceUrl` (e.g., `http://<agbara-go-host>:<port>/api/v1/voice/control`), its `CallService` constructs a FreeSWITCH `originate` command that directly uses a Lua script like `handle_agbara_voiceurl.lua`.
+
+The dial string generated by `CallService` might look like:
+`{agbara_call_sid=CA...,agbara_account_sid=AC...,agbara_application_sid=AP...,origination_caller_id_name='...',origination_caller_id_number='...'}sofia/gateway/your_gateway/destination_number lua(handle_agbara_voiceurl.lua http://your_agbara_app_voice_url ${uuid} ${agbara_account_sid} ${agbara_application_sid})`
+
+The `handle_agbara_voiceurl.lua` script (as exemplified above, and which should be placed in FreeSWITCH's scripts directory) would then make an HTTP request to the provided `VoiceUrl` (first argument to lua script), appending `CallSid` (second arg), `AccountSid` (third arg), and `ApplicationSid` (fourth arg) as query parameters. Agbara-Go's `/api/v1/voice/control` endpoint (or whatever `VoiceUrl` is) will receive this request and respond with TwiML.
 
 ### 2. Using `mod_httapi`
 
@@ -153,12 +132,65 @@ When Agbara-Go originates a call, it would set channel variables like `agbara_ap
 
 Your Agbara-Go application will need to expose HTTP endpoints that FreeSWITCH can call. These endpoints (defined by `Application.VoiceUrl`) will receive call parameters from FreeSWITCH and must respond with TwiML-like XML that FreeSWITCH can understand and execute. The `pkg/twiml` package in Agbara-Go will assist in generating this XML.
 
-**Key Variables to Pass from FreeSWITCH to Agbara-Go:**
-When FreeSWITCH makes an HTTP request to Agbara-Go, ensure it passes at least:
-*   `Channel-Call-UUID` (or `uuid`): The unique ID of the call leg.
-*   `AccountSid`: The Agbara Account SID associated with the call.
-*   `Caller-Caller-ID-Number` / `Caller-Caller-ID-Name`
-*   `Caller-Destination-Number`
-*   `Digits` (if any input was gathered, e.g., via `<Gather>`)
+**Key Variables to Pass from FreeSWITCH to Agbara-Go (via Lua):**
+When the Lua script makes an HTTP request to Agbara-Go, ensure it passes at least:
+*   `CallSid` (from `session.uuid`): The unique ID of the call leg.
+*   `AccountSid`: The Agbara Account SID associated with the call (passed as arg to Lua).
+*   `ApplicationSid`: The Agbara Application SID (passed as arg to Lua, if available).
+*   Optionally: `From` (Caller ID), `To` (Destination), `Digits` (if any input was gathered).
 
 These allow Agbara-Go to provide contextually relevant TwiML instructions.
+
+### Gateway Configuration for Outbound Calls
+
+Agbara-Go can instruct FreeSWITCH to use specific gateways for outbound calls based on Account Settings (`DefaultOutboundGateway` or `GatewaySelectionScript`).
+
+*   **Define Gateways in FreeSWITCH:** You must configure these gateways within your FreeSWITCH's SIP Profiles (e.g., in `conf/sip_profiles/external/my_gateway.xml`). Each gateway will have its own registration details, codecs, and dialling rules.
+    Example gateway definition snippet:
+    ```xml
+    <gateway name="my_carrier_gateway_1">
+      <param name="username" value="user"/>
+      <param name="password" value="pass"/>
+      <param name="proxy" value="sip.carrier.com"/>
+      <param name="register" value="true"/>
+      <!-- other params -->
+    </gateway>
+    ```
+*   **Agbara-Go Reference:** When an Agbara-Go Account has `DefaultOutboundGateway` set to `my_carrier_gateway_1`, the `CallService` will attempt to format the FreeSWITCH `originate` dial string like:
+    `...{channel_vars}sofia/gateway/my_carrier_gateway_1/destination_number ...`
+*   **Lua for Dynamic Gateways:** If using `GatewaySelectionScript` on an Account, that Lua script (which you create and place in FreeSWITCH's scripts directory) will be invoked by `originate`. The `CallService` will format the dial string like:
+    `...{channel_vars}lua(your_gateway_script.lua destination_number) ...`
+    The Lua script (`your_gateway_script.lua`) receives the destination number as an argument and must return the dial string part for the selected gateway (e.g., `sofia/gateway/selected_gateway/`). It's crucial this script is well-tested and secure.
+
+## Real-time Event Handling
+
+To provide real-time updates for call and conference statuses, Agbara-Go now maintains a persistent Event Socket Layer (ESL) connection to FreeSWITCH dedicated to listening for events.
+
+### Event Subscription
+
+Upon startup, Agbara-Go subscribes to a set of FreeSWITCH events. The default list of subscribed events is:
+`CHANNEL_CREATE CHANNEL_ANSWER CHANNEL_HANGUP_COMPLETE CHANNEL_PROGRESS_MEDIA CUSTOM conference::maintenance RECORD_STOP`
+
+This list can be customized via the `FS_EVENT_SUBSCRIPTIONS` environment variable in Agbara-Go.
+
+### Event Processing
+
+Received events are parsed and dispatched internally to relevant services:
+*   **CallService**: Processes events like `CHANNEL_CREATE`, `CHANNEL_ANSWER`, `CHANNEL_HANGUP_COMPLETE`, `CHANNEL_PROGRESS_MEDIA` to update the status, timestamps (start/end), duration, and FreeSWITCH call ID of call records in the Agbara-Go database.
+*   **ConferenceService**: Processes `CUSTOM conference::maintenance` events (for participant actions like join, leave, mute/unmute, talking states) and `CHANNEL_HANGUP_COMPLETE` (for participants leaving a conference) to update conference and participant records.
+
+This ensures that the call and conference information retrieved via the Agbara-Go API reflects the most current state known from FreeSWITCH.
+
+### Important Considerations for Event Handling:
+
+1.  **Event Format:** The current implementation primarily parses event headers assuming `plain` event format from FreeSWITCH. If your FreeSWITCH ESL is configured to send events in JSON or XML format, the Agbara-Go event parsing logic (`pkg/freeswitch_events/dispatcher.go`) would need to be adapted.
+2.  **Channel Variables for Correlation:**
+    *   For Call events, Agbara-Go attempts to correlate events to its internal call records using the FreeSWITCH Channel UUID (`Unique-ID` header) matched against the `freeswitch_call_id` field, or by using a channel variable `variable_agbara_call_sid` if present in the event. Ensure your dialplan or originate commands set `agbara_call_sid=${agbara_call_sid}` (where `${agbara_call_sid}` is the Agbara Call SID generated by `CallService`) on channels if you need to rely on Agbara's internal Call SID for event correlation.
+    *   For Conference participant events (like hangup), Agbara-Go looks for `variable_conference_name` (or `variable_conference_uuid`) on the channel to identify which conference the participant belonged to. Ensure your FreeSWITCH dialplan (e.g., the part that dials into a conference) sets this variable on participant channels:
+        ```xml
+        <action application="set" data="conference_name=${agbara_conference_sid}"/> <!-- where ${agbara_conference_sid} is the SID of the Agbara Conference -->
+        <action application="conference" data="${agbara_conference_sid}@default"/>
+        ```
+3.  **Event Reliability:** While the ESL connection includes reconnection logic, ensure your FreeSWITCH event socket configuration is stable.
+4.  **`conference::maintenance` Events:** For detailed conference participant updates, ensure that the FreeSWITCH conference profile is configured to fire these `CUSTOM` events (this is usually default behavior). The `conference::maintenance` events are subscribed to as `CUSTOM` type, and then filtered by `Event-Subclass` in the handler.
+```
