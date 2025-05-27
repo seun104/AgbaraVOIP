@@ -4,48 +4,54 @@ import (
 	"time"
 )
 
-// AccountType represents the type of an account (e.g., trial, full).
+// AccountType (already defined)
 type AccountType string
-
-// AccountStatus represents the status of an account (e.g., active, suspended).
-type AccountStatus string
-
 const (
-	// Default Account Types (examples, actual values might differ based on AgbaraCommon)
 	AccountTypeTrial AccountType = "trial"
 	AccountTypeFull  AccountType = "full"
+)
 
-	// Default Account Statuses (examples)
+// AccountStatus (already defined)
+type AccountStatus string
+const (
 	AccountStatusActive    AccountStatus = "active"
 	AccountStatusSuspended AccountStatus = "suspended"
 	AccountStatusClosed    AccountStatus = "closed"
 )
 
-// Account model, corresponds to Domain/Objects/Account.cs
+// Account model update for gateway settings
 type Account struct {
 	Sid          string        `json:"sid"`
-	ParentSid    string        `json:"parentSid,omitempty"` // Omit if empty (master account)
+	ParentSid    string        `json:"parentSid,omitempty"` 
 	FriendlyName string        `json:"friendlyName"`
 	PhoneNumber  string        `json:"phoneNumber,omitempty"`
 	DateCreated  time.Time     `json:"dateCreated"`
 	DateUpdated  time.Time     `json:"dateUpdated"`
 	Type         AccountType   `json:"type"`
 	Status       AccountStatus `json:"status"`
-	AuthToken    string        `json:"-"` // Exclude AuthToken from JSON responses by default for security
-                                         // It will be selected and used internally by the service/auth logic.
+	AuthToken    string        `json:"-"` 
+	
+	// New Gateway Settings
+	DefaultOutboundGateway string `json:"defaultOutboundGateway,omitempty"`
+	GatewaySelectionScript string `json:"gatewaySelectionScript,omitempty"` // e.g., name of a Lua script in FreeSWITCH
 }
 
-// CreateAccountRequest model for POST /Accounts and /Accounts/Master
+// CreateAccountRequest (already defined, no changes needed for this step)
 type CreateAccountRequest struct {
 	FriendlyName string `json:"friendlyName" binding:"required"`
 }
 
-// ChangeAccountStatusRequest model for POST /Accounts/{AccountSid} (for modifying status)
+// ChangeAccountStatusRequest (already defined)
 type ChangeAccountStatusRequest struct {
-	Status AccountStatus `json:"status" binding:"required"` // Use AccountStatus type for validation
+	Status AccountStatus `json:"status" binding:"required"`
 }
 
-// Note: The C# AccountModule also implies a ChangeAccountType functionality in the IAccountService,
-// but there's no specific request model shown in AccountModule for it, nor an endpoint.
-// If ChangeAccountType needs an API endpoint, a ChangeAccountTypeRequest model would be needed.
-// For now, only CreateAccountRequest and ChangeAccountStatusRequest are defined based on AccountModule.cs.
+// Add a new DTO for updating account settings, including gateway config
+type UpdateAccountSettingsRequest struct {
+    FriendlyName           *string `json:"friendlyName,omitempty"` // Pointer to distinguish empty from not provided
+    PhoneNumber            *string `json:"phoneNumber,omitempty"`
+    Type                   *AccountType `json:"type,omitempty"`
+    // Status is changed via ChangeAccountStatusRequest for clarity
+    DefaultOutboundGateway *string `json:"defaultOutboundGateway,omitempty"`
+    GatewaySelectionScript *string `json:"gatewaySelectionScript,omitempty"`
+}

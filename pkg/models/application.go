@@ -5,64 +5,72 @@ import (
 	"time"
 )
 
-// HTTPMethod represents common HTTP methods.
+// HTTPMethod (already defined)
 type HTTPMethod string
-
 const (
 	HTTPMethodGET  HTTPMethod = "GET"
 	HTTPMethodPost HTTPMethod = "POST"
 )
+func (h HTTPMethod) Validate() bool {
+	s := strings.ToUpper(string(h))
+	switch s {
+	case "": return true
+	case string(HTTPMethodGET): return true
+	case string(HTTPMethodPost): return true
+	default: return false
+	}
+}
 
-// Application model, corresponds to Domain/Objects/Application.cs
+
+// Application model (ensure comments reflect usage by FreeSWITCH for call control)
 type Application struct {
 	Sid                   string     `json:"sid"`
 	AccountSid            string     `json:"accountSid"`
 	FriendlyName          string     `json:"friendlyName"`
+	// VoiceUrl: FreeSWITCH will make an HTTP request to this URL for call control instructions (TwiML).
 	VoiceUrl              string     `json:"voiceUrl,omitempty"`
-	VoiceMethod           HTTPMethod `json:"voiceMethod,omitempty"` // Use HTTPMethod type
+	VoiceMethod           HTTPMethod `json:"voiceMethod,omitempty"` 
+	// VoiceFallbackUrl: If VoiceUrl request fails, FreeSWITCH may try this URL.
 	VoiceFallbackUrl      string     `json:"voiceFallbackUrl,omitempty"`
 	VoiceFallbackMethod   HTTPMethod `json:"voiceFallbackMethod,omitempty"`
+	// StatusCallback: Agbara-Go (or FS directly) could send call progress events here.
 	StatusCallback        string     `json:"statusCallback,omitempty"`
 	StatusCallbackMethod  HTTPMethod `json:"statusCallbackMethod,omitempty"`
+	// SmsUrl: URL for FreeSWITCH to request when an SMS is received for this application.
 	SmsUrl                string     `json:"smsUrl,omitempty"`
 	SmsMethod             HTTPMethod `json:"smsMethod,omitempty"`
+	// SmsFallbackUrl: Fallback URL if SmsUrl request fails.
 	SmsFallbackUrl        string     `json:"smsFallbackUrl,omitempty"`
 	SmsFallbackMethod     HTTPMethod `json:"smsFallbackMethod,omitempty"`
+	// SmsStatusCallback: URL for Agbara-Go to send SMS delivery status events.
 	SmsStatusCallback     string     `json:"smsStatusCallback,omitempty"`
 	SmsStatusCallbackMethod HTTPMethod `json:"smsStatusCallbackMethod,omitempty"`
-	HeartbeatUrl          string     `json:"heartbeatUrl,omitempty"`
+	// HeartbeatUrl: URL for an external system to check the health of this application (if Agbara-Go needs to implement it).
+	HeartbeatUrl          string     `json:"heartbeatUrl,omitempty"` 
 	DateCreated           time.Time  `json:"dateCreated"`
 	DateUpdated           time.Time  `json:"dateUpdated"`
 }
 
-// ApplicationRequest DTO for creating or updating an Application.
-// For updates, fields not provided (e.g., empty string for string types)
-// should ideally not overwrite existing values unless that's the intent.
-// Service logic will need to handle partial updates carefully if this DTO is used for PATCH,
-// or assume full replacement if used for PUT/POST-update.
+// ApplicationRequest DTO - Add binding tags for URL validation
 type ApplicationRequest struct {
 	FriendlyName          string     `json:"friendlyName" binding:"required"`
-	VoiceUrl              string     `json:"voiceUrl,omitempty"`
-	VoiceMethod           HTTPMethod `json:"voiceMethod,omitempty"`
-	VoiceFallbackUrl      string     `json:"voiceFallbackUrl,omitempty"`
+	VoiceUrl              string     `json:"voiceUrl,omitempty" binding:"omitempty,url"`
+	VoiceMethod           HTTPMethod `json:"voiceMethod,omitempty"` // Validation via HTTPMethod.Validate()
+	VoiceFallbackUrl      string     `json:"voiceFallbackUrl,omitempty" binding:"omitempty,url"`
 	VoiceFallbackMethod   HTTPMethod `json:"voiceFallbackMethod,omitempty"`
-	StatusCallback        string     `json:"statusCallback,omitempty"`
+	StatusCallback        string     `json:"statusCallback,omitempty" binding:"omitempty,url"`
 	StatusCallbackMethod  HTTPMethod `json:"statusCallbackMethod,omitempty"`
-	SmsUrl                string     `json:"smsUrl,omitempty"`
+	SmsUrl                string     `json:"smsUrl,omitempty" binding:"omitempty,url"`
 	SmsMethod             HTTPMethod `json:"smsMethod,omitempty"`
-	SmsFallbackUrl        string     `json:"smsFallbackUrl,omitempty"`
+	SmsFallbackUrl        string     `json:"smsFallbackUrl,omitempty" binding:"omitempty,url"`
 	SmsFallbackMethod     HTTPMethod `json:"smsFallbackMethod,omitempty"`
-	SmsStatusCallback     string     `json:"smsStatusCallback,omitempty"`
+	SmsStatusCallback     string     `json:"smsStatusCallback,omitempty" binding:"omitempty,url"`
 	SmsStatusCallbackMethod HTTPMethod `json:"smsStatusCallbackMethod,omitempty"`
-	HeartbeatUrl          string     `json:"heartbeatUrl,omitempty"`
+	HeartbeatUrl          string     `json:"heartbeatUrl,omitempty" binding:"omitempty,url"`
 }
 
-// ToAppModel converts ApplicationRequest DTO to Application model.
-// AccountSid needs to be set separately.
+// ToAppModel (already defined, ensure it correctly handles HTTPMethod conversion)
 func (ar *ApplicationRequest) ToAppModel() *Application {
-	// Default HTTP methods if not provided or invalid, or keep them empty
-	// and let DB default or validation handle it.
-	// For now, ensure they are uppercase if provided.
 	return &Application{
 		FriendlyName:          ar.FriendlyName,
 		VoiceUrl:              ar.VoiceUrl,
@@ -78,21 +86,5 @@ func (ar *ApplicationRequest) ToAppModel() *Application {
 		SmsStatusCallback:     ar.SmsStatusCallback,
 		SmsStatusCallbackMethod: HTTPMethod(strings.ToUpper(string(ar.SmsStatusCallbackMethod))),
 		HeartbeatUrl:          ar.HeartbeatUrl,
-	}
-}
-
-// ValidateHTTPMethod ensures the method is one of the allowed types, or empty.
-// This can be used during binding or service logic.
-func (h HTTPMethod) Validate() bool {
-	s := strings.ToUpper(string(h))
-	switch s {
-	case "": // Allow empty (will not be set or will use DB default if any)
-		return true
-	case string(HTTPMethodGET):
-		return true
-	case string(HTTPMethodPost):
-		return true
-	default:
-		return false
 	}
 }
