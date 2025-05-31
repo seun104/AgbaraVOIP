@@ -1,0 +1,80 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: . # Use the current directory where docker-compose.yml is located
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080" # Map host port 8080 to container port 8080 (from config.yml)
+    volumes:
+      # Mount config.yml to allow changes without rebuilding image (optional for dev)
+      # For production, config.yml should be baked into the image or managed by orchestration
+      - ./config.yml:/root/config.yml
+    depends_on:
+      - db
+      - freeswitch
+    environment:
+      # Example: If you need to override config via env vars
+      # SERVER_PORT: 8080
+      # LOG_LEVEL: debug
+      # DB_HOST: db
+      # DB_PORT: 5432
+      # DB_USER: agbarauser
+      # DB_PASSWORD: agbarapassword
+      # DB_NAME: agbaravoip
+      # FREESWITCH_HOST: freeswitch
+      # FREESWITCH_PORT: 8021
+      # FREESWITCH_PASSWORD: ClueCon
+      GIN_MODE: release # Or debug
+    networks:
+      - agbaravoip_network
+
+  db:
+    image: postgres:15-alpine
+    ports:
+      - "5432:5432" # Expose PostgreSQL port to the host
+    environment:
+      POSTGRES_USER: agbarauser
+      POSTGRES_PASSWORD: agbarapassword
+      POSTGRES_DB: agbaravoip
+    volumes:
+      - postgres_data:/var/lib/postgresql/data # Persist database data
+    networks:
+      - agbaravoip_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agbarauser -d agbaravoip"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  freeswitch:
+    image: signalwire/freeswitch:latest # Using one of the official/community images
+    ports:
+      - "8021:8021"  # ESL
+      - "5060:5060/udp" # SIP UDP
+      - "5061:5061/udp" # SIP UDP (TLS)
+      - "5080:5080/udp" # SIP UDP (alternative)
+      - "5081:5081/udp" # SIP UDP (TLS alternative)
+      # Add more ports as needed for RTP, etc.
+      - "16384-32768:16384-32768/udp" # RTP ports
+    volumes:
+      # Placeholder for custom Freeswitch configurations if needed later
+      # - ./freeswitch/conf:/usr/local/freeswitch/conf
+      - freeswitch_data:/usr/local/freeswitch/db # Persist Freeswitch data/recordings if any
+    networks:
+      - agbaravoip_network
+    # Freeswitch needs specific capabilities for networking
+    cap_add:
+      - NET_ADMIN
+      - NET_BROADCAST
+      - NET_RAW
+    # privileged: true # Alternatively, but less secure
+
+volumes:
+  postgres_data:
+  freeswitch_data:
+
+networks:
+  agbaravoip_network:
+    driver: bridge

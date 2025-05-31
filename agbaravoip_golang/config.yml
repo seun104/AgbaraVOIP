@@ -1,0 +1,14 @@
+SERVER_PORT: "8080"
+LOG_LEVEL: "debug"
+
+DB_HOST: "db" # Service name in docker-compose
+DB_PORT: "5432"
+DB_USER: "agbarauser"
+DB_PASSWORD: "agbarapassword" # Should be overridden by env var or Docker secrets in prod
+DB_NAME: "agbaravoip"
+DB_SCHEMA: "public"
+
+FS_ADDRESS: "freeswitch" # Service name in docker-compose for inbound connections
+FS_PORT: "8021"
+FS_PASSWORD: "ClueCon" # Default Freeswitch password, change in production!
+FS_OUTBOUND_LISTEN_ADDRESS: ":8084" # Port for this app to listen on for outbound ESL connections from Freeswitch
