@@ -6,70 +6,78 @@ import (
 	"gorm.io/gorm"
 )
 
-// CallStatus defines the lifecycle status of a call.
+// CallStatus defines the status of a call.
 type CallStatus string
 
 const (
-	CallStatusQueued     CallStatus = "queued"
-	CallStatusInitiated  CallStatus = "initiated" // Origination sent to Freeswitch
-	CallStatusRinging    CallStatus = "ringing"
-	CallStatusInProgress CallStatus = "in-progress"
-	CallStatusCompleted  CallStatus = "completed"
-	CallStatusFailed     CallStatus = "failed"
-	CallStatusBusy       CallStatus = "busy"
-	CallStatusNoAnswer   CallStatus = "no-answer"
-	CallStatusCanceled   CallStatus = "canceled"  // Canceled before completion
+	CallStatusQueued         CallStatus = "queued"      
+	CallStatusInitiated      CallStatus = "initiated"    
+	CallStatusRinging        CallStatus = "ringing"      
+	CallStatusInProgress     CallStatus = "in-progress"   
+	CallStatusInProgressXML  CallStatus = "in-progress-xml" 
+	CallStatusCompleted      CallStatus = "completed"    
+	CallStatusFailed         CallStatus = "failed"       
+	CallStatusFailedXML      CallStatus = "failed-xml"   
+	CallStatusBusy           CallStatus = "busy"
+	CallStatusNoAnswer       CallStatus = "no-answer"
+	CallStatusCanceled       CallStatus = "canceled"     
 )
 
-// CallDirection indicates whether the call is inbound or outbound.
+// CallDirection defines the direction of a call.
 type CallDirection string
 
 const (
 	CallDirectionInbound      CallDirection = "inbound"
-	CallDirectionOutboundAPI  CallDirection = "outbound-api"  // Initiated via API
-	CallDirectionOutboundDial CallDirection = "outbound-dial" // Initiated via Dial command (e.g. click-to-call)
+	CallDirectionOutboundAPI  CallDirection = "outbound-api"  
+	CallDirectionOutboundDial CallDirection = "outbound-dial" 
 )
 
-// Call represents a voice call record in the system.
+// Call represents a voice call in the system.
 type Call struct {
 	ID        uint   `gorm:"primaryKey"`
-	SID       string `gorm:"type:varchar(64);uniqueIndex;not null"` // Publicly visible SID, e.g., CAxxxxxxxx
-	AccountSID string `gorm:"type:varchar(64);index;not null"`    // Belongs to an Account SID
-	ApplicationSID *string `gorm:"type:varchar(64);index"`          // Optional Application SID if call is tied to an app
+	SID       string `gorm:"type:varchar(64);uniqueIndex;not null"`
+	AccountSID string `gorm:"type:varchar(64);index;not null"`
+	ApplicationSID *string `gorm:"type:varchar(64);index;null"` 
 
-	FromNum string `gorm:"type:varchar(100)"` // Originating number
-	ToNum   string `gorm:"type:varchar(100)"` // Destination number
+	FromNum string `gorm:"type:varchar(100)"`
+	ToNum   string `gorm:"type:varchar(100)"`
 	
-	AnswerURL string `gorm:"type:text"` // URL for AgbaraXML or call control logic
+	AnswerURL string `gorm:"type:text"`
 
-	Status    CallStatus    `gorm:"type:call_status;not null;default:'queued'"` // Using custom ENUM type from DB
-	Direction CallDirection `gorm:"type:call_direction;not null"`           // Using custom ENUM type from DB
+	Status    CallStatus    `gorm:"type:call_status;not null"` 
+	Direction CallDirection `gorm:"type:call_direction;not null"`
 
-	DurationSeconds int     `gorm:"default:0"`         // Billable duration in seconds
-	Price           float64 `gorm:"type:numeric(10,5);default:0.0"` // Cost of the call
+	DurationSeconds int     `gorm:"default:0"`
+	Price           float64 `gorm:"type:numeric(10,5);default:0.0"`
 
-	AnsweredBy    *string `gorm:"type:varchar(100)"`      // e.g., human, machine, fax
-	TimeoutSeconds *int    `gorm:"default:null"`           // Call timeout specified at origination
-	HangupCause   *string `gorm:"type:varchar(100)"`      // Freeswitch hangup cause
-	ForwardedFrom *string `gorm:"type:varchar(100)"`      // If the call was forwarded from another number/SIP URI
+	AnsweredBy     *string  `gorm:"type:varchar(100)"` 
+	TimeoutSeconds *int     `gorm:"default:null"` 
 
-	StartTime  *time.Time     `gorm:"index"` // Time of call initiation attempt
-	AnswerTime *time.Time     // Time the call was answered
-	EndTime    *time.Time     // Time the call ended
+	HangupCause   *string `gorm:"type:varchar(100)"` 
+	ForwardedFrom *string `gorm:"type:varchar(100)"` 
+
+	StartTime  *time.Time     `gorm:"default:null;index"` 
+	AnswerTime *time.Time     `gorm:"default:null"`
+	EndTime    *time.Time     `gorm:"default:null"`
 	
 	CreatedAt time.Time      `gorm:"autoCreateTime"`
 	UpdatedAt time.Time      `gorm:"autoUpdateTime"`
-	DeletedAt gorm.DeletedAt `gorm:"index"` // For soft deletes
+	DeletedAt gorm.DeletedAt `gorm:"index"`
 }
 
-// BeforeCreate is a GORM hook that runs before a new record is created.
+// BeforeCreate is a GORM hook.
 func (call *Call) BeforeCreate(tx *gorm.DB) (err error) {
 	if call.SID == "" {
 		call.SID = "CA" + uuid.NewString()
 	}
-	if call.Status == "" { // Default status if not set
+	if call.Status == "" { 
 		call.Status = CallStatusQueued
 	}
-	// Direction must be set explicitly by the service creating the call.
+	// It's generally better for the service layer to set StartTime explicitly.
+	// This hook can serve as a fallback if necessary.
+	// if call.StartTime == nil { 
+	// 	 now := time.Now().UTC() // Simplified comment
+	//   call.StartTime = &now
+	// }
 	return
 }

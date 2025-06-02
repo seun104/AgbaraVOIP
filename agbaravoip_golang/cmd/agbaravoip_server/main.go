@@ -1,93 +1,46 @@
 package main
-
-import (
-	"context"
-	"net/http" 
-	"os"
-	"os/signal"
-	"sync"
-	"syscall"
-	"time"
-	
-	"gorm.io/gorm" 
-
-	"github.com/user/agbaravoip_golang/internal/api"
-	"github.com/user/agbaravoip_golang/internal/config"
-	"github.com/user/agbaravoip_golang/internal/database"
-	"github.com/user/agbaravoip_golang/internal/esl"
-	"github.com/user/agbaravoip_golang/internal/logging"
-	"github.com/user/agbaravoip_golang/internal/services" 
-	"github.com/sirupsen/logrus"
-)
-
+import ( "context"; "net/http"; "os"; "os/signal"; "strings"; "sync"; "syscall"; "time"; "gorm.io/gorm";
+	"github.com/user/agbaravoip_golang/internal/api"; "github.com/user/agbaravoip_golang/internal/config";
+	"github.com/user/agbaravoip_golang/internal/database"; "github.com/user/agbaravoip_golang/internal/esl";
+	"github.com/user/agbaravoip_golang/internal/logging"; "github.com/user/agbaravoip_golang/internal/services";
+	"github.com/user/agbaravoip_golang/internal/callcontrol"; "github.com/sirupsen/logrus" )
 var dbConn *gorm.DB 
-
 type AppConfigProvider struct { cfg config.Config }
-func (p AppConfigProvider) GetESLOutboundServerListenAddress() string { return p.cfg.Freeswitch.FSOutboundListenAddress }
-
+func (p AppConfigProvider) GetESLOutboundServerListenAddress() string { 
+	addr := p.cfg.Freeswitch.FSOutboundListenAddress; if addr == "" { addr = ":8084" } 
+	if strings.HasPrefix(addr, ":") { logrus.Warnf("FSOutboundListenAddress %s starts with :, use resolvable host for FS in Docker.", addr); return "127.0.0.1" + addr }
+	return addr
+}
 func main() {
-	cfg, err := config.LoadConfig(".")
-	if err != nil { logrus.Fatalf("Failed to load configuration: %v", err) }
-
-	appLogger := logging.InitLogger(cfg)
-	appLogger.Info("AgbaraVOIP GoLang Server Starting...")
-	appLogger.Infof("Config loaded: %+v", cfg)
-
-	dbConn, err = database.InitDB(cfg)
-	if err != nil { appLogger.Fatalf("Failed to initialize database: %v", err) }
-	appLogger.Info("Database initialized and migrations applied.")
-
-	eslInboundClient, errEsl := esl.NewFSInboundClient(cfg.Freeswitch) 
-	if errEsl != nil {
-		appLogger.Warnf("Failed to initialize ESL Inbound Client: %v. Call origination may fail.", errEsl)
-	} else {
-		appLogger.Info("ESL Inbound Client initialized.")
-		// Test command removed for cleaner startup in this script
-	}
-
+	cfg, err := config.LoadConfig("."); if err != nil { logrus.Fatalf("Failed config: %v", err) }
+	appLogger := logging.InitLogger(cfg); appLogger.Info("AgbaraVOIP Server Starting...")
+	dbConn, err = database.InitDB(cfg); if err != nil { appLogger.Fatalf("Failed DB: %v", err) }
+	appLogger.Info("DB initialized.")
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+	xmlProcessor := callcontrol.NewXMLProcessor(appLogger, httpClient)
+	eslInboundClient, err := esl.NewFSInboundClient(cfg, appLogger)
+	if err != nil { appLogger.Warnf("Failed Inbound ESL: %v.", err) } else { appLogger.Info("Inbound ESL Client initialized.") }
 	accountService := services.NewAccountService(dbConn, appLogger)
 	applicationService := services.NewApplicationService(dbConn, appLogger)
 	configProvider := AppConfigProvider{cfg: cfg}
-	callService := services.NewCallService(dbConn, eslInboundClient, applicationService, configProvider, appLogger) 
-	
-	apiServer := api.NewServer(cfg, appLogger, accountService, applicationService, callService) 
-	
-	go func() {
-		if errSrv := apiServer.Start(); errSrv != nil && errSrv != http.ErrServerClosed { 
-			appLogger.Fatalf("Could not start HTTP server: %v", errSrv)
-		}
-	}()
-
-	eslOutboundServer, errOutbound := esl.NewFSOutboundServer(cfg, appLogger) 
-	if errOutbound != nil {
-		appLogger.Warnf("Failed to initialize ESL Outbound Server: %v.", errOutbound)
-	} else {
-		appLogger.Info("ESL Outbound Server initialized.")
-	}
-
-	shutdown := make(chan os.Signal, 1)
-	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
+	callService := services.NewCallService(dbConn, eslInboundClient, applicationService, configProvider, appLogger)
+	apiServer := api.NewServer(cfg, appLogger, accountService, applicationService, callService, xmlProcessor)
+	go func() { if err := apiServer.Start(); err != nil && err != http.ErrServerClosed { appLogger.Fatalf("HTTP server error: %v", err) } }()
+	eslOutboundServer, err := esl.NewFSOutboundServer(cfg, appLogger, xmlProcessor /*, callService - removed */) // Pass xmlProcessor
+	if err != nil { appLogger.Warnf("Failed Outbound ESL: %v.", err) } else { appLogger.Info("Outbound ESL Server initialized.") }
+	shutdown := make(chan os.Signal, 1); signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
 	var wg sync.WaitGroup
 	go func() {
-		sig := <-shutdown
-		appLogger.Infof("Received shutdown signal: %v. Starting graceful shutdown...", sig)
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer shutdownCancel()
-		
-		if apiServer != nil { wg.Add(1); go func() { defer wg.Done(); if errSrvShutdown := apiServer.Shutdown(shutdownCtx); errSrvShutdown != nil { appLogger.Errorf("HTTP server shutdown error: %v", errSrvShutdown) } else { appLogger.Info("HTTP server shut down gracefully.") } }() }
+		sig := <-shutdown; appLogger.Infof("Shutdown signal: %v...", sig)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second); defer cancel()
+		if apiServer != nil { wg.Add(1); go func() { defer wg.Done(); if err := apiServer.Shutdown(ctx); err != nil { appLogger.Errorf("HTTP shutdown error: %v", err) } else { appLogger.Info("HTTP server down.") } }() }
 		if eslOutboundServer != nil { wg.Add(1); go func() { defer wg.Done(); eslOutboundServer.Shutdown() }() }
 		if eslInboundClient != nil { wg.Add(1); go func() { defer wg.Done(); eslInboundClient.Close(); appLogger.Info("ESL Inbound Client closed.") }() }
-		
-		waitDone := make(chan struct{}); go func() { defer close(waitDone); wg.Wait() }()
-		select {
-		case <-waitDone: appLogger.Info("All components shut down gracefully.")
-		case <-shutdownCtx.Done(): appLogger.Error("Shutdown timed out.")
-		}
-		
-		if dbConn != nil { appLogger.Info("Closing database connection."); sqlDB, _ := dbConn.DB(); if sqlDB != nil { sqlDB.Close() } }
-		appLogger.Info("Shutdown complete."); os.Exit(0) 
-	}()
-	appLogger.Info("Application started. Press Ctrl+C to exit."); select {} 
+		done := make(chan struct{}); go func() { defer close(done); wg.Wait() }()
+		select { case <-done: appLogger.Info("Graceful shutdown.") case <-ctx.Done(): appLogger.Error("Shutdown timed out.") }
+		if dbConn != nil { appLogger.Info("Closing DB."); sqlDB, _ := dbConn.DB(); if sqlDB != nil { sqlDB.Close() } }
+		appLogger.Info("Application shutdown."); os.Exit(0) 
+	}();
+	appLogger.Info("Application started. Ctrl+C to exit."); select {} 
 }
-
 
