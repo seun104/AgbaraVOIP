@@ -26,7 +26,7 @@ func NewFSOutboundServer(cfg config.Config, logger *logrus.Logger) (*FSOutboundS
 	logEntry := logger.WithFields(logrus.Fields{"component": "esl_outbound_server"})
 	listenAddress := cfg.Freeswitch.FSOutboundListenAddress
 	if listenAddress == "" {
-		listenAddress = ":8084"
+		listenAddress = ":8084" 
 		logEntry.Warnf("FSOutboundListenAddress not set in config, defaulting to %s", listenAddress)
 	}
 
@@ -37,7 +37,7 @@ func NewFSOutboundServer(cfg config.Config, logger *logrus.Logger) (*FSOutboundS
 	}
 
 	server := &FSOutboundServer{
-		cfg:      cfg,
+		cfg:      cfg, 
 		logger:   logEntry,
 		listener: listener,
 		shutdown: make(chan struct{}),
@@ -65,9 +65,9 @@ func (s *FSOutboundServer) acceptConnections() {
 					return
 				}
 				s.logger.Errorf("Failed to accept ESL outbound connection: %v", err)
-				continue
+				continue 
 			}
-
+			
 			s.wg.Add(1)
 			go s.handleOutboundConnection(conn)
 		}
@@ -96,10 +96,10 @@ func (s *FSOutboundServer) handleOutboundConnection(netConn net.Conn) {
 // Shutdown gracefully stops the ESL outbound server.
 func (s *FSOutboundServer) Shutdown() {
 	s.logger.Info("ESL Outbound Server initiating shutdown...")
-	close(s.shutdown)
+	close(s.shutdown) 
 	if s.listener != nil {
-		s.listener.Close()
+		s.listener.Close() 
 	}
-	s.wg.Wait()
+	s.wg.Wait() 
 	s.logger.Info("ESL Outbound Server shut down gracefully.")
 }

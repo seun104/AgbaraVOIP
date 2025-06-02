@@ -72,4 +72,40 @@ This document tracks the progress of re-implementing the AgbaraVOIP system in Go
     - Created `internal/services_test/account_service_test.go` with mock structure and skeleton unit tests.
     - Created `internal/api_test/account_api_test.go` with placeholder integration tests.
 
-*(Sections for Phase 2 through Phase 8 will be detailed as each phase begins)*
+---
+## Phase 2: Application Management & Basic Call Origination
+- **Goal:** Implement Application entity CRUD and basic call origination logic.
+- **Status:** In Progress
+
+### Tasks:
+- [X] **Task P2.0: Define Application Domain & Service (`internal/domain/application.go`, `internal/services/application_service.go`):**
+    - Updated `domain/application.go` with GORM tags and `BeforeCreate` hook.
+    - Created `services/application_service.go` with CRUD methods (`CreateApplication`, `GetApplicationBySID`, `ListApplications`, `UpdateApplication`, `DeleteApplication`).
+    - Added `IApplicationService` to `services/interfaces.go`.
+    - Integrated `ApplicationService` into `main.go` and `api/server.go` constructors.
+- [X] **Task P2.1: Implement Application API Handlers & Routes (`internal/api/application_handlers.go`, `internal/api/application_routes.go`):**
+    - Create Gin handlers for Application CRUD.
+    - Define DTOs for Application API requests/responses in `dto.go`.
+    - Register Application routes under `/v1/accounts/:account_sid/applications`.
+    - Ensure routes are protected by authentication middleware.
+- [X] **Task P2.2: Basic Call Origination Logic (Service & DB Setup):**
+    - Created `Call` entity in `internal/domain/call.go`.
+    - Created DB migration `000003_create_calls_table.sql`.
+    - Updated `ICallService` in `internal/services/interfaces.go`.
+    - Implemented `CallService` (`OriginateCall`, `GetCallBySID`, `ListCalls`) in `internal/services/call_service.go`, including DB interaction for call record creation and ESL client usage for sending originate command.
+    - Integrated `CallService` into `main.go` and `api.NewServer`.
+- [X] **Task P2.3: Implement Call Origination API Endpoint:**
+    - Created `CallHandler` in `internal/api/call_handlers.go` with methods for `CreateCall`, `GetCall`, `ListCalls`.
+    - Added Call DTOs to `internal/api/dto.go`.
+    - Registered call routes (`/v1/accounts/:account_sid/calls` and `.../:call_sid`) in `internal/api/server.go`.
+- [X] **Task P2.4: Testing (Unit & Integration - Applications, Basic Call Origination):**
+    - Created skeleton unit test files with mocks for `ApplicationService` (`internal/services_test/application_service_test.go`) and `CallService` (`internal/services_test/call_service_test.go`).
+    - Created placeholder API integration test files (`internal/api_test/application_api_test.go`, `internal/api_test/call_api_test.go`).
+
+---
+## Phase 2: Application Management & Basic Call Origination
+- **Goal:** Implement Application entity CRUD and basic call origination logic.
+- **Status:** Completed
+*(Ensure all sub-tasks P2.0-P2.4 are marked [X] above this status update)*
+
+*(Sections for Phase 3 through Phase 8 will be detailed as each phase begins)*

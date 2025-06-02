@@ -59,7 +59,7 @@ func (m *MockGormDB) Create(value interface{}) *gorm.DB {
 			// In a real test, you might want to test the hook logic directly
 			// or ensure your mock setup reflects its outcome.
 			// For now, just ensure it has some SID.
-			// acc.SID = "AC_mocked_sid_on_create"
+			// acc.SID = "AC_mocked_sid_on_create" 
 		}
 	}
 	return &gorm.DB{Error: args.Error(0)}
@@ -85,12 +85,12 @@ func TestAccountService_CreateMasterAccount(t *testing.T) {
 	// The MockGormDB provided is too basic for full GORM testing.
 	// We are passing a nil *gorm.DB to NewAccountService for compilation purposes only in this script.
 	// In a real test environment, this would be a connection to a test DB (e.g., SQLite in-memory).
-	accountService := services.NewAccountService(nil, logger)
+	accountService := services.NewAccountService(nil, logger) 
 
 
 	t.Run("Successful master account creation - conceptual test", func(t *testing.T) {
 		t.Skip("Skipping GORM dependent test. Requires a real test DB or proper GORM mock.")
-
+		
 		// Example of how you would use a mock (if MockGormDB was fully implemented)
 		// mockDb := new(MockGormDB)
 		// mockDb.On("Create", mock.AnythingOfType("*domain.Account")).Return(nil).Once()
@@ -98,7 +98,7 @@ func TestAccountService_CreateMasterAccount(t *testing.T) {
 
 		friendlyName := "Test Master"
 		authToken := "strongpassword123"
-
+		
 		// account, err := accountServiceWithMock.CreateMasterAccount(friendlyName, authToken)
 		// assert.NoError(t, err)
 		// assert.NotNil(t, account)
@@ -122,18 +122,18 @@ func TestAccountService_ValidateCredentials(t *testing.T) {
 
 	t.Run("Successful validation - conceptual test", func(t *testing.T) {
 		t.Skip("Skipping GORM dependent test. Requires a real test DB or proper GORM mock.")
-
+		
 		// testSID := "ACtest123"
 		// plainPassword := "password123"
 		// mockAccount := &domain.Account{ /* ... setup ... */ }
 
 		// Mock DB interaction for GetAccountBySID
 		// mockDb := new(MockGormDB)
-		// mockDb.On("Where", "sid = ?", testSID).Return(mockDb)
+		// mockDb.On("Where", "sid = ?", testSID).Return(mockDb) 
 		// mockDb.On("First", mock.AnythingOfType("*domain.Account"), mock.Anything).
 		//   Run(func(args mock.Arguments) {
 		//	  arg := args.Get(0).(*domain.Account)
-		//	  *arg = *mockAccount
+		//	  *arg = *mockAccount 
 		//   }).Return(nil).Once()
 		// accountServiceWithMock := services.NewAccountService(mockDb, logger)
 		//
@@ -148,3 +148,5 @@ func TestAccountService_ValidateCredentials(t *testing.T) {
 		assert.ErrorIs(t, err, services.ErrInvalidCredentials)
 	})
 }
+
+

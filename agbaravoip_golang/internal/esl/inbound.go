@@ -28,7 +28,7 @@ func NewFSInboundClient(cfg config.FreeswitchConfig) (*FSInboundClient, error) {
 		return nil, fmt.Errorf("esl.NewFSInboundClient: failed to dial Freeswitch: %w", err)
 	}
 	logging.Logger.Infof("Successfully connected to Freeswitch (inbound) at %s", address)
-
+	
 	return &FSInboundClient{conn: c, cfg: cfg}, nil
 }
 
@@ -38,7 +38,7 @@ func (fc *FSInboundClient) SendCommand(command string) (string, error) {
 		return "", fmt.Errorf("esl.SendCommand: not connected to Freeswitch")
 	}
 	logging.Logger.Debugf("Sending Inbound ESL command: %s", command)
-
+	
 	ev, err := fc.conn.Send(command)
 	if err != nil {
 		logging.Logger.Errorf("Failed to send command '%s': %v", command, err)

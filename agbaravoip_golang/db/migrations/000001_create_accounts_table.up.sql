@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'UTC'),
     updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'UTC'),
     CONSTRAINT fk_parent_account
-        FOREIGN KEY(parent_sid)
+        FOREIGN KEY(parent_sid) 
         REFERENCES accounts(sid)
         ON DELETE SET NULL -- Or RESTRICT, depending on desired behavior
 );

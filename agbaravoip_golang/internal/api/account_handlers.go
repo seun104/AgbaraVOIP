@@ -4,16 +4,16 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/user/agbaravoip_golang/internal/domain"
+	"github.com/user/agbaravoip_golang/internal/domain" 
 	"github.com/user/agbaravoip_golang/internal/services"
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
 )
 
-var _ *domain.Account
+var _ *domain.Account 
 
 type AccountHandler struct {
-	service services.IAccountService
+	service services.IAccountService 
 	logger  *logrus.Entry
 }
 
@@ -65,7 +65,7 @@ func (h *AccountHandler) GetAccount(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, GenericErrorResponse{Error: "Internal server error", Details: "Authentication context missing."})
 		return
 	}
-
+	
 	authAccountSid, ok := authAccountSidVal.(string)
 	if !ok {
 		h.logger.Error("Critical: Authenticated account_sid in context is not a string.")

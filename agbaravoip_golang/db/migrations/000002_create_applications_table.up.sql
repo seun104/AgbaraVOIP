@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS applications (
     created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'UTC'),
     updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'UTC'),
     CONSTRAINT fk_applications_account
-        FOREIGN KEY(account_sid)
+        FOREIGN KEY(account_sid) 
         REFERENCES accounts(sid)
         ON DELETE CASCADE -- If an account is deleted, its applications are also deleted
 );
