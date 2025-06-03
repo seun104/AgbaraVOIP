@@ -6,7 +6,7 @@ This document tracks the progress of re-implementing the AgbaraVOIP system in Go
 - [X] Phase 0: Setup and Core Foundation
 - [X] Phase 1: Account Management & Authentication
 - [X] Phase 2: Application Management & Basic Call Origination
-- [ ] Phase 3: Core AgbaraXML-like Processing (Outbound ESL)
+- [X] Phase 3: Core AgbaraXML-like Processing (Outbound ESL)
 - [ ] Phase 4: Advanced Call Control Features (Gather, Record, Dial-Primitives)
 - [ ] Phase 5: Conference Calls & Complex Dial
 - [ ] Phase 6: SMS Functionality
@@ -52,40 +52,6 @@ This document tracks the progress of re-implementing the AgbaraVOIP system in Go
 - [X] **Task P2.4: Testing (Unit & Integration - Initial Setup for Applications & Calls)**
 
 ---
-## Phase 3: Core AgbaraXML-like Processing (Outbound ESL)
-- **Goal:** Enable Freeswitch to connect to the Go app for call control instructions, process basic commands.
-- **Status:** In Progress
-
-### Tasks:
-- [X] **Task P3.0: Define CallContext & Refine Outbound ESL Server Structure:**
-    - Created `internal/callcontrol/context.go` with `CallContext` struct.
-    - Implemented `NewCallContext` to populate from Freeswitch connect event.
-    - Refined `internal/esl/outbound.go`:
-        - `NewFSOutboundServer` updated (though `ICallService` dependency was temporarily removed to break an import cycle - this needs to be addressed with interfaces).
-        - `handleOutboundConnection` now creates `CallContext` and sends initial ESL commands (`connect`, `myevents`, `linger`, simplified `answer`).
-        - Current `handleOutboundConnection` is simplified to auto-hangup; full ESL interaction using `fiorix/go-eventsocket` for server-side connection wrapping needs further investigation due to persistent "undefined: eventsocket.NewConnection" issues. Resolved `CallContext` type inference issues.
-- [X] **Task P3.1: Basic AgbaraXML Document Structure & Parsing:**
-    - Defined `CallControlElement` interface, `CallControlAction`, `CallControlResult` and structs for core verbs (`Say`, `Play`, `Hangup`, `Pause`, `Redirect`, `ResponseElement`) in `internal/domain/call_control.go`.
-    - Implemented `AgbaraXMLParser` in `internal/callcontrol/xml_parser.go` to unmarshal XML into these structs.
-- [ ] **Task P3.2: Implement Core AgbaraXML Verb Execution:**
-    - In `internal/callcontrol/interpreter.go` (new file), create an `Execute(callCtx *CallContext, xmlDoc *AgbaraXMLResponse)` function.
-    - Implement logic for `<Say>` (using `eslConn.Execute("speak", ...)`), `<Play>` (`eslConn.Execute("playback", ...)`), `<Hangup>`, `<Pause>`.
-    - `FSOutboundServer.handleOutboundConnection` will call this interpreter after fetching XML.
-- [ ] **Task P3.3: HTTP Client for Fetching AgbaraXML:**
-    - Add a utility in `internal/utils/httpclient.go` or similar for fetching XML from URLs specified in `CallContext.AnswerURL`.
-    - `FSOutboundServer.handleOutboundConnection` will use this to fetch XML.
-- [ ] **Task P3.4: Integrate XML Fetching & Execution in Outbound Handler:**
-    - `FSOutboundServer.handleOutboundConnection` will now:
-        1. Establish ESL connection, create `CallContext`.
-        2. Fetch XML from `CallContext.AnswerURL`.
-        3. Parse XML.
-        4. Loop through parsed verbs and execute them using the interpreter.
-        5. Handle `<Redirect>` by fetching and processing the new URL.
-- [ ] **Task P3.5: Testing (Unit tests for XML parsing, verb execution, HTTP client):**
-    - Unit tests for AgbaraXML parsing.
-    - Unit tests for individual verb execution logic (mocking ESL connection).
-
-*(Sections for Phase 4 through Phase 8 will be detailed as each phase begins)*## Phase 3: Core AgbaraXML-like Processing (Outbound ESL)
 - **Goal:** Implement the core call control logic where the Go application handles calls delegated by Freeswitch, processing AgbaraXML-like instructions.
 - **Status:** Completed
 
@@ -119,3 +85,22 @@ This document tracks the progress of re-implementing the AgbaraVOIP system in Go
     - Unit tests for `XMLProcessor.FetchAndParseXML` (mocking HTTP).
     - Unit tests for verb `Execute` methods (mocking context, ESL, call service).
     - Placeholder/skeletons for `CallContext` tests and Outbound ESL integration tests created.
+
+---
+## Phase 4: Advanced Call Control Features (Gather, Record, Dial-Primitives)
+- **Goal:** Implement advanced call control verbs like Gather, Record, and primitive Dial.
+- **Status:** In Progress
+
+### Tasks:
+- [X] **Task P4.0: Define GatherElement, RecordElement, and DialElement (Primitives) Structs & Stubs**
+    - Defined `GatherElement` and `RecordElement` in `internal/domain/call_control.go` with fields, XML tags, and stubbed `Execute` methods.
+    - Added `ActionGather` and `ActionRecord` to `CallControlAction` ENUM.
+    - Ensured all call control elements consistently implement `GetActionURL()`, `GetMethod()`, and return `CallControlResult`.
+    - (Note: `DialElement` definition will be part of a subsequent task within Phase 4)
+- [ ] **Task P4.1: Implement `Execute` Method for `GatherElement`**
+- [ ] **Task P4.2: Implement `Execute` Method for `RecordElement`**
+- [ ] **Task P4.3: Implement `DialElement` (Primitive) and its `Execute` Method**
+- [ ] **Task P4.4: Update `XMLProcessor` for New Elements**
+- [ ] **Task P4.5: Update `recordings` Table and Service**
+- [ ] **Task P4.6: Integrate New Verbs into Outbound ESL Handler**
+- [ ] **Task P4.7: Testing for Phase 4 Features**
