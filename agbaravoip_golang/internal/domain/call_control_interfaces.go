@@ -98,4 +98,13 @@ type CallServicerForESL interface {
 
 	// Add CreateCall if Dial verb needs it through this interface in the future
 	// Example: CreateSubsequentCall(ctx MinimalCallContext, params CreateCallParams) (newCallUUID string, err error)
+
+	// SMSService methods
+	SendSMS(ctx context.Context, accountSid, to, from, body, msgSID, actionURL, actionMethod string) (*SMSMessage, error)
+	GetSMSBySID(ctx context.Context, sid string) (*SMSMessage, error)
+	UpdateSMSStatus(ctx context.Context, agbaraSid string, gatewaySid *string, status SMSStatus, errorCode *int32, errorMessage *string, eventTime *time.Time) error
+	RecordInboundSMS(ctx context.Context, accountSid, to, from, body, inboundGatewayMsgSid string) (*SMSMessage, error)
+
+	// Application service methods needed by handlers using CallServicerForESL
+	GetApplicationByIncomingDID(ctx context.Context, did string) (*Application, error)
 }

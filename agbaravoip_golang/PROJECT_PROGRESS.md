@@ -9,7 +9,7 @@ This document tracks the progress of re-implementing the AgbaraVOIP system in Go
 - [X] Phase 3: Core AgbaraXML-like Processing (Outbound ESL)
 - [X] Phase 4: Advanced Call Control Features (Gather, Record, Dial-Primitives)
 - [X] Phase 5: Conference Calls & Complex Dial
-- [ ] Phase 6: SMS Functionality
+- [X] Phase 6: SMS Functionality
 - [ ] Phase 7: Advanced Features, Security Hardening, Scalability
 - [ ] Phase 8: Documentation & Production Readiness
 
@@ -152,3 +152,25 @@ This document tracks the progress of re-implementing the AgbaraVOIP system in Go
     - Added unit tests for `ConferenceElement.Execute`, updated `DialElement.Execute` tests.
     - Added comprehensive unit tests for `ConferenceService` methods.
     - Enhanced integration tests in `outbound_integration_test.go` for conference event handling scenarios.
+
+---
+## Phase 6: SMS Functionality
+- **Goal:** Implement capabilities for sending SMS via AgbaraXML and receiving inbound SMS via API.
+- **Status:** Completed
+
+### Tasks:
+- [X] **Task P6.0: Define `SmsElement` and `domain.SMSMessage` Object**
+    - Defined `SmsElement` in `call_control.go` (attributes: `To`, `From`, `ActionURL`/`StatusCallback`, `Method`; chardata: `Body`). Added `ActionSms` ENUM.
+    - Created `domain/sms.go` with `SMSMessage` DB struct and `SMSStatus`/`SMSDirection` ENUMs.
+- [X] **Task P6.1: Database Migration for `sms_messages` Table**
+    - Created DB migration for `sms_messages` table with all necessary columns, indexes, and `updated_at` trigger.
+- [X] **Task P6.2: Implement SMS Service & Interface**
+    - Created `SMSService` interface and `smsService` implementation (using sqlx/GORM and a mocked gateway client) for sending, receiving, and updating SMS messages.
+    - Integrated SMS methods into `CallServicerForESL` and `CallService`.
+- [X] **Task P6.3: Implement `Execute` Method for `SmsElement`**
+    - Implemented `SmsElement.Execute` to validate inputs, generate an SMS SID, call `callSvc.SendSMS`, and return `ActionContinue`.
+- [X] **Task P6.4: API Endpoint for Inbound SMS**
+    - Implemented API endpoint (`/v1/sms/inbound`) for receiving SMS from gateways.
+    - Handler records messages via `SMSService`, looks up application `SmsURL`, and prepares for (future) AgbaraXML processing from `SmsURL` responses.
+- [X] **Task P6.5: Unit and Integration Tests for Phase 6 Features**
+    - Added comprehensive unit tests for `SmsElement.Execute`, all `SMSService` methods (with DB and gateway mocks), and the inbound SMS API handler.

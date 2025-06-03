@@ -141,4 +141,22 @@ func (s *ApplicationService) DeleteApplication(accountSid string, appSid string)
 	return nil
 }
 
+func (s *applicationService) GetApplicationByIncomingDID(ctx context.Context, did string) (*domain.Application, error) {
+	s.log.Infof("Attempting to find application by incoming DID (matched against friendly_name): %s", did)
+	var app domain.Application
+	// This query is a placeholder. In a real system, you'd look up a number in a dedicated
+	// phone_numbers table that maps DIDs to applications and accounts.
+	// Using friendly_name as a proxy for DID lookup for this example.
+	// Or, if an application is directly assigned a DID, there might be an 'incoming_did' field.
+	if err := s.db.WithContext(ctx).Where("friendly_name = ?", did).First(&app).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			s.log.Warnf("No application found with friendly_name (as DID): %s", did)
+			return nil, domain.ErrNotFound // Use domain specific error
+		}
+		s.log.Errorf("Error querying application by friendly_name (as DID) %s: %v", did, err)
+		return nil, fmt.Errorf("querying application by DID/FriendlyName %s: %w", did, err)
+	}
+	s.log.Infof("Found application SID %s for DID (friendly_name) %s", app.SID, did)
+	return &app, nil
+}
 

@@ -1,19 +1,19 @@
 package domain_test
 
 import (
-	"context" // Required for new Conference methods in mock
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
 	"testing"
-	"time" // Required for new Conference methods in mock
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/user/agbaravoip_golang/internal/callcontrol" // For Pending structs
+	"github.com/user/agbaravoip_golang/internal/callcontrol"
 	"github.com/user/agbaravoip_golang/internal/domain"
 )
 
@@ -24,9 +24,7 @@ type MockMinimalCallContext struct {
 
 func (m *MockMinimalCallContext) Log() *logrus.Entry {
 	args := m.Called()
-	if args.Get(0) == nil {
-		entry := logrus.NewEntry(logrus.New()); entry.Logger.SetOutput(io.Discard); return entry
-	}
+	if args.Get(0) == nil { entry := logrus.NewEntry(logrus.New()); entry.Logger.SetOutput(io.Discard); return entry }
 	return args.Get(0).(*logrus.Entry)
 }
 func (m *MockMinimalCallContext) GetUuid() string             { return m.Called().String(0) }
@@ -98,9 +96,11 @@ func (m *MockEslConnectionExecutor) PlayAndGetDigits(min,max,maxAtt int,tO uint3
 
 // --- MockCallServicerForESL ---
 type MockCallServicerForESL struct{ mock.Mock }
+// Call methods
 func (m *MockCallServicerForESL) UpdateCallStatus(ctx domain.MinimalCallContext,s string,hC string) error { return m.Called(ctx,s,hC).Error(0) }
-func (m *MockCallServicerForESL) UpdateCallRecording(ctx domain.MinimalCallContext,rP string,dS int,f string) error { return m.Called(ctx,rP,dS,f).Error(0) }
+// Recording methods
 func (m *MockCallServicerForESL) CreateRecording(ctx domain.MinimalCallContext,cS *string,rS,fP string,dur uint32,fS string,sB int64) error { return m.Called(ctx,cS,rS,fP,dur,fS,sB).Error(0) }
+// Conference methods
 func (m *MockCallServicerForESL) GetConferenceBySID(ctx context.Context, sid string) (*domain.Conference, error) { args := m.Called(ctx, sid); if args.Get(0) == nil { return nil, args.Error(1) }; return args.Get(0).(*domain.Conference), args.Error(1) }
 func (m *MockCallServicerForESL) GetConferenceByName(ctx context.Context, accountSid, name string) (*domain.Conference, error) { args := m.Called(ctx, accountSid, name); if args.Get(0) == nil { return nil, args.Error(1) }; return args.Get(0).(*domain.Conference), args.Error(1) }
 func (m *MockCallServicerForESL) CreateConference(ctx context.Context, accountSid, name, sid string) (*domain.Conference, error) { args := m.Called(ctx, accountSid, name, sid); if args.Get(0) == nil { return nil, args.Error(1) }; return args.Get(0).(*domain.Conference), args.Error(1) }
@@ -114,6 +114,14 @@ func (m *MockCallServicerForESL) UpdateParticipantMuteStatus(ctx context.Context
 func (m *MockCallServicerForESL) UpdateParticipantModeratorStatus(ctx context.Context, pSid string, isModerator bool) error { return m.Called(ctx, pSid, isModerator).Error(0) }
 func (m *MockCallServicerForESL) RemoveParticipant(ctx context.Context, pSid string, leaveTime time.Time) error { return m.Called(ctx, pSid, leaveTime).Error(0) }
 func (m *MockCallServicerForESL) ListParticipants(ctx context.Context, confSid string) ([]*domain.ConferenceParticipant, error) { args := m.Called(ctx, confSid); if args.Get(0) == nil { return nil, args.Error(1) }; return args.Get(0).([]*domain.ConferenceParticipant), args.Error(1) }
+// SMS methods
+func (m *MockCallServicerForESL) SendSMS(ctx context.Context, accountSid, to, from, body, msgSID, actionURL, actionMethod string) (*domain.SMSMessage, error) { args := m.Called(ctx, accountSid, to, from, body, msgSID, actionURL, actionMethod); if args.Get(0) == nil { return nil, args.Error(1) }; return args.Get(0).(*domain.SMSMessage), args.Error(1) }
+func (m *MockCallServicerForESL) GetSMSBySID(ctx context.Context, sid string) (*domain.SMSMessage, error) { args := m.Called(ctx, sid); if args.Get(0) == nil { return nil, args.Error(1) }; return args.Get(0).(*domain.SMSMessage), args.Error(1) }
+func (m *MockCallServicerForESL) UpdateSMSStatus(ctx context.Context, agbaraSid string, gatewaySid *string, status domain.SMSStatus, errorCode *int32, errorMessage *string, eventTime *time.Time) error { return m.Called(ctx, agbaraSid, gatewaySid, status, errorCode, errorMessage, eventTime).Error(0) }
+func (m *MockCallServicerForESL) RecordInboundSMS(ctx context.Context, accountSid, to, from, body, inboundGatewayMsgSid string) (*domain.SMSMessage, error) { args := m.Called(ctx, accountSid, to, from, body, inboundGatewayMsgSid); if args.Get(0) == nil { return nil, args.Error(1) }; return args.Get(0).(*domain.SMSMessage), args.Error(1) }
+// Application methods
+func (m *MockCallServicerForESL) GetApplicationByIncomingDID(ctx context.Context, did string) (*domain.Application, error) { args := m.Called(ctx, did); if args.Get(0) == nil { return nil, args.Error(1) }; return args.Get(0).(*domain.Application), args.Error(1) }
+
 
 // --- setupTestMocks ---
 func setupTestMocks(t *testing.T) (*logrus.Entry, *MockMinimalCallContext, *MockEslConnectionExecutor, *MockCallServicerForESL) {
@@ -124,23 +132,18 @@ func setupTestMocks(t *testing.T) (*logrus.Entry, *MockMinimalCallContext, *Mock
 
 	mockCtx.On("Log").Return(testLogger)
 	mockCtx.On("GetUuid").Return("test-uuid-123")
-	mockCtx.On("GetFreeswitchUUID").Return("test-fs-uuid-123") // Default FS UUID for tests
-	mockCtx.On("GetAccountSid").Return("test-account-sid") // Default Account SID
+	mockCtx.On("GetFreeswitchUUID").Return("test-fs-uuid-123")
+	mockCtx.On("GetAccountSid").Return("test-account-sid")
 
-	// Default for methods that return chan, to prevent nil panic if not specifically mocked in a test
-	dummyElementsChan := make(chan []domain.CallControlElement)
-	close(dummyElementsChan) // Close so reads don't block indefinitely
+	dummyElementsChan := make(chan []domain.CallControlElement); close(dummyElementsChan)
 	mockCtx.On("GetNextElementsChannel").Maybe().Return((<-chan []domain.CallControlElement)(dummyElementsChan))
-
-	dummyHangupChan := make(chan struct{})
-	// close(dummyHangupChan) // Don't close, let specific tests manage or rely on IsHangupInitiated
+	dummyHangupChan := make(chan struct{});
 	mockCtx.On("HangupChan").Maybe().Return((<-chan struct{})(dummyHangupChan))
-
 
 	return testLogger, mockCtx, mockEsl, mockCallSvc
 }
 
-// --- Verb Tests (Existing Say, Play, Hangup, Pause, Redirect are kept for regression) ---
+// --- Verb Tests ---
 func TestSayElement_Execute(t *testing.T) {
 	_, mockCtx, mockEsl, mockCallSvc := setupTestMocks(t)
 	say := domain.SayElement{Text: "Hello", Loop: 1, Engine: "flite", Voice: "slt"}
@@ -150,8 +153,6 @@ func TestSayElement_Execute(t *testing.T) {
 	assert.Equal(t, domain.ActionContinue, result.Action); assert.NoError(t, result.Err)
 	mockEsl.AssertExpectations(t); mockCtx.AssertExpectations(t)
 }
-// ... (other existing tests for Say, Play, Hangup, Pause, Redirect are assumed to be here and correct) ...
-
 func TestPlayElement_Execute(t *testing.T) {
 	_, mockCtx, mockEsl, mockCallSvc := setupTestMocks(t)
 	play := domain.PlayElement{URL: "file://sound.wav", Loop: 1}
@@ -160,7 +161,6 @@ func TestPlayElement_Execute(t *testing.T) {
 	assert.Equal(t, domain.ActionContinue, result.Action); assert.NoError(t, result.Err)
 	mockEsl.AssertExpectations(t)
 }
-
 func TestHangupElement_Execute(t *testing.T) {
 	_, mockCtx, mockEsl, mockCallSvc := setupTestMocks(t)
 	hangup := domain.HangupElement{Reason: "USER_BUSY"}
@@ -169,7 +169,6 @@ func TestHangupElement_Execute(t *testing.T) {
 	assert.Equal(t, domain.ActionHangup, result.Action); assert.NoError(t, result.Err)
 	mockEsl.AssertExpectations(t)
 }
-
 func TestPauseElement_Execute(t *testing.T) {
 	_, mockCtx, mockEsl, mockCallSvc := setupTestMocks(t)
 	pause := domain.PauseElement{Length: 5}
@@ -179,7 +178,6 @@ func TestPauseElement_Execute(t *testing.T) {
 	assert.Equal(t, domain.ActionContinue, result.Action); assert.NoError(t, result.Err)
 	mockEsl.AssertExpectations(t)
 }
-
 func TestRedirectElement_Execute(t *testing.T) {
 	_, mockCtx, mockEsl, mockCallSvc := setupTestMocks(t)
 	redirect := domain.RedirectElement{URL: "http://example.com/next", Method: "POST"}
@@ -188,7 +186,6 @@ func TestRedirectElement_Execute(t *testing.T) {
 	assert.Equal(t, "http://example.com/next", result.RedirectURL)
 	assert.Equal(t, "POST", result.RedirectMethod)
 }
-
 
 // --- GatherElement Execute Tests ---
 func TestGatherElement_Execute_Success_NoActionURL_NoInput(t *testing.T) {
@@ -221,12 +218,11 @@ func TestGatherElement_Execute_NestedPlayError(t *testing.T) {
 	_, mockCtx, mockEsl, mockCallSvc := setupTestMocks(t)
 	gather := domain.GatherElement{Play: &domain.PlayElement{URL: "prompt.wav"}}
 	expectedError := errors.New("nested playback failed")
-	mockEsl.On("Execute", "playback", "prompt.wav").Return("", expectedError).Once() // Play.Execute will call this
+	mockEsl.On("Execute", "playback", "prompt.wav").Return("", expectedError).Once()
 	result := gather.Execute(mockCtx, mockEsl, mockCallSvc)
 	assert.Equal(t, domain.ActionError, result.Action); assert.Error(t, result.Err); assert.Contains(t, result.Err.Error(), "Nested Play failed")
 	mockEsl.AssertExpectations(t)
 }
-
 
 // --- RecordElement Execute Tests ---
 func TestRecordElement_Execute_Success(t *testing.T) {
@@ -299,13 +295,12 @@ func TestDialElement_Execute_WithSipTarget(t *testing.T) {
 	mockEsl.AssertExpectations(t); mockCtx.AssertExpectations(t)
 }
 func TestDialElement_Execute_EmptyNestedTargetError(t *testing.T) {
-	_, mockCtx, _, _ := setupTestMocks(t) // mockEsl, mockCallSvc not used directly here
+	_, mockCtx, _, _ := setupTestMocks(t)
 	dialNumEmpty := domain.DialElement{Number: &domain.NumberElement{PhoneNumber: " "}}
-	resultNum := dialNumEmpty.Execute(mockCtx, nil, nil) // Pass nil for esl, svc as it should error before using them
+	resultNum := dialNumEmpty.Execute(mockCtx, nil, nil)
 	assert.Equal(t, domain.ActionError, resultNum.Action); assert.EqualError(t, resultNum.Err, "Dial <Number> is empty")
 	mockCtx.AssertExpectations(t)
 }
-
 
 // --- ConferenceElement Execute Tests ---
 func TestConferenceElement_Execute_Success(t *testing.T) {
@@ -313,21 +308,14 @@ func TestConferenceElement_Execute_Success(t *testing.T) {
 	confElement := domain.ConferenceElement{RoomName: "testRoom123", Muted: true, CallbackURL: "/conf_events"}
 	mockConf := &domain.Conference{SID: "CFmockSID", FriendlyName: "testRoom123", AccountSID: "ACtestacc"}
 	mockParticipant := &domain.ConferenceParticipant{SID: "CPmockPartSID"}
-
-	mockCtx.On("GetAccountSid").Return("ACtestacc").Times(2) // For GetOrCreateConference and AddParticipant
-	mockCtx.On("GetUuid").Return("CAtestcall").Times(2)      // For AddParticipant and logging
-
+	mockCtx.On("GetAccountSid").Return("ACtestacc").Times(2); mockCtx.On("GetUuid").Return("CAtestcall").Times(2)
 	mockCallSvc.On("GetOrCreateConference", mock.Anything, "ACtestacc", "testRoom123").Return(mockConf, nil).Once()
 	mockCallSvc.On("AddParticipant", mock.Anything, "CFmockSID", "CAtestcall", mock.AnythingOfType("string"), "ACtestacc", true, false).Return(mockParticipant, nil).Once()
-
 	mockCtx.On("SetCurrentConferenceParticipantSID", "CPmockPartSID").Return().Once()
 	mockCtx.On("EnterConference", "CFmockSID", "testRoom123", "/conf_events", "POST").Return().Once()
-
 	expectedConfDialString := "testRoom123@default+mute"
 	mockEsl.On("Execute", "conference", expectedConfDialString).Return("OK", nil).Once()
-
 	mockCtx.On("LeaveConference").Return().Once()
-
 	result := confElement.Execute(mockCtx, mockEsl, mockCallSvc)
 	assert.Equal(t, domain.ActionContinue, result.Action); assert.NoError(t, result.Err)
 	mockCtx.AssertExpectations(t); mockEsl.AssertExpectations(t); mockCallSvc.AssertExpectations(t)
@@ -349,74 +337,138 @@ func TestConferenceElement_Execute_GetOrCreateDBError(t *testing.T) {
 	assert.Equal(t, domain.ActionError, result.Action); assert.Error(t, result.Err); assert.True(t, errors.Is(result.Err, dbError) || strings.Contains(result.Err.Error(), "DB GetOrCreateConference failed"))
 	mockCtx.AssertExpectations(t); mockCallSvc.AssertExpectations(t)
 }
-
-// Assuming ConferenceElement.Execute is updated to make AddParticipant error fatal
 func TestConferenceElement_Execute_AddParticipantDBError_Fatal(t *testing.T) {
 	_, mockCtx, mockEsl, mockCallSvc := setupTestMocks(t)
 	confElement := domain.ConferenceElement{RoomName: "testRoomAddPartError"}
 	mockConf := &domain.Conference{SID: "CFmockSID2", FriendlyName: "testRoomAddPartError"}
 	dbError := errors.New("db error add_participant")
-
-	mockCtx.On("GetAccountSid").Return("ACtestadd").Times(2)
-	mockCtx.On("GetUuid").Return("CAtestcall2").Times(1) // Only for AddParticipant
+	mockCtx.On("GetAccountSid").Return("ACtestadd").Times(2); mockCtx.On("GetUuid").Return("CAtestcall2").Times(1)
 	mockCallSvc.On("GetOrCreateConference", mock.Anything, "ACtestadd", "testRoomAddPartError").Return(mockConf, nil).Once()
 	mockCallSvc.On("AddParticipant", mock.Anything, mockConf.SID, "CAtestcall2", mock.AnythingOfType("string"), "ACtestadd", false, false).Return(nil, dbError).Once()
-
 	result := confElement.Execute(mockCtx, mockEsl, mockCallSvc)
-
-	assert.Equal(t, domain.ActionError, result.Action) // Should be ActionError if AddParticipant error is fatal
-	assert.Error(t, result.Err)
-	// The error message in Execute is "Failed to add participant ...", not the raw dbError.
+	assert.Equal(t, domain.ActionError, result.Action); assert.Error(t, result.Err)
 	assert.Contains(t, result.Err.Error(), "Failed to add participant")
 	mockEsl.AssertNotCalled(t, "Execute", "conference", mock.Anything)
 	mockCtx.AssertExpectations(t); mockCallSvc.AssertExpectations(t)
 }
-
 func TestConferenceElement_Execute_AddParticipantConflictAllowed(t *testing.T) {
 	_, mockCtx, mockEsl, mockCallSvc := setupTestMocks(t)
 	confElement := domain.ConferenceElement{RoomName: "testRoomConflict"}
 	mockConf := &domain.Conference{SID: "CFmockSID3", FriendlyName: "testRoomConflict"}
-
-	mockCtx.On("GetAccountSid").Return("ACtestconflict").Times(2)
-	mockCtx.On("GetUuid").Return("CAtestcall3").Times(2)
+	mockCtx.On("GetAccountSid").Return("ACtestconflict").Times(2); mockCtx.On("GetUuid").Return("CAtestcall3").Times(2)
 	mockCallSvc.On("GetOrCreateConference", mock.Anything, "ACtestconflict", "testRoomConflict").Return(mockConf, nil).Once()
 	mockCallSvc.On("AddParticipant", mock.Anything, mockConf.SID, "CAtestcall3", mock.AnythingOfType("string"), "ACtestconflict", false, false).Return(nil, domain.ErrConflict).Once()
-
 	mockCtx.On("EnterConference", mockConf.SID, mockConf.FriendlyName, "", "POST").Return().Once()
 	mockEsl.On("Execute", "conference", "testRoomConflict@default").Return("OK", nil).Once()
 	mockCtx.On("LeaveConference").Return().Once()
-
 	result := confElement.Execute(mockCtx, mockEsl, mockCallSvc)
 	assert.Equal(t, domain.ActionContinue, result.Action); assert.NoError(t, result.Err)
 	mockCtx.AssertExpectations(t); mockCallSvc.AssertExpectations(t); mockEsl.AssertExpectations(t)
 }
-
 func TestConferenceElement_Execute_EslError(t *testing.T) {
 	_, mockCtx, mockEsl, mockCallSvc := setupTestMocks(t)
 	confElement := domain.ConferenceElement{RoomName: "testRoomESLError"}
 	mockConf := &domain.Conference{SID: "CFmockSID4", FriendlyName: "testRoomESLError"}
 	mockParticipant := &domain.ConferenceParticipant{SID: "CPmockPartSID4"}
 	eslError := errors.New("esl conference failed")
-
-	mockCtx.On("GetAccountSid").Return("ACtestesl").Times(2)
-	mockCtx.On("GetUuid").Return("CAtestcall4").Times(2)
+	mockCtx.On("GetAccountSid").Return("ACtestesl").Times(2); mockCtx.On("GetUuid").Return("CAtestcall4").Times(2)
 	mockCallSvc.On("GetOrCreateConference", mock.Anything, "ACtestesl", "testRoomESLError").Return(mockConf, nil).Once()
 	mockCallSvc.On("AddParticipant", mock.Anything, mockConf.SID, "CAtestcall4", mock.AnythingOfType("string"), "ACtestesl", false, false).Return(mockParticipant, nil).Once()
-
 	mockCtx.On("SetCurrentConferenceParticipantSID", "CPmockPartSID4").Return().Once()
 	mockCtx.On("EnterConference", mockConf.SID, mockConf.FriendlyName, "", "POST").Return().Once()
 	mockEsl.On("Execute", "conference", "testRoomESLError@default").Return("", eslError).Once()
 	mockCtx.On("LeaveConference").Return().Once()
-
 	result := confElement.Execute(mockCtx, mockEsl, mockCallSvc)
 	assert.Contains(t, []domain.CallControlAction{domain.ActionError, domain.ActionHangup}, result.Action)
 	assert.Error(t, result.Err); assert.True(t, errors.Is(result.Err, eslError) || strings.Contains(result.Err.Error(), eslError.Error()))
 	mockCtx.AssertExpectations(t); mockCallSvc.AssertExpectations(t); mockEsl.AssertExpectations(t)
 }
 
+// --- SmsElement Execute Tests ---
+func TestSmsElement_Execute_Success(t *testing.T) {
+	_, mockCtx, mockEsl, mockCallSvc := setupTestMocks(t)
+	smsElement := domain.SmsElement{To: "to_num", From: "from_num", Body: "Hello SMS"}
+
+	mockCtx.On("GetAccountSid").Return("AC123").Once()
+
+	mockCallSvc.On("SendSMS",
+		mock.Anything, // context.Context
+		"AC123",
+		"to_num",
+		"from_num",
+		"Hello SMS",
+		mock.MatchedBy(func(sid string) bool { return strings.HasPrefix(sid, "SM") }),
+		"",
+		"POST",
+	).Return(&domain.SMSMessage{SID: "SMgeneratedsid"}, nil).Once()
+
+	result := smsElement.Execute(mockCtx, mockEsl, mockCallSvc)
+
+	assert.Equal(t, domain.ActionContinue, result.Action)
+	assert.NoError(t, result.Err)
+	mockCallSvc.AssertExpectations(t)
+	mockCtx.AssertExpectations(t)
+}
+
+func TestSmsElement_Execute_ServiceError(t *testing.T) {
+	_, mockCtx, mockEsl, mockCallSvc := setupTestMocks(t)
+	smsElement := domain.SmsElement{To: "to_num", From: "from_num", Body: "Error SMS"}
+	serviceErr := errors.New("sms service failure")
+
+	mockCtx.On("GetAccountSid").Return("AC123").Once()
+	mockCallSvc.On("SendSMS", mock.Anything, "AC123", "to_num", "from_num", "Error SMS", mock.AnythingOfType("string"), "", "POST").Return(nil, serviceErr).Once()
+
+	result := smsElement.Execute(mockCtx, mockEsl, mockCallSvc)
+
+	assert.Equal(t, domain.ActionError, result.Action)
+	assert.Error(t, result.Err)
+	assert.True(t, errors.Is(result.Err, serviceErr) || strings.Contains(result.Err.Error(), serviceErr.Error()))
+	mockCallSvc.AssertExpectations(t)
+	mockCtx.AssertExpectations(t)
+}
+
+func TestSmsElement_Execute_Validation_EmptyTo(t *testing.T) {
+	_, mockCtx, mockEsl, mockCallSvc := setupTestMocks(t)
+	smsElement := domain.SmsElement{To: " ", From: "from_num", Body: "Test Body"}
+	mockCtx.On("GetAccountSid").Maybe().Return("AC123") // May not be called due to early exit
+	result := smsElement.Execute(mockCtx, mockEsl, mockCallSvc)
+	assert.Equal(t, domain.ActionError, result.Action)
+	assert.EqualError(t, result.Err, "SmsElement: 'to', 'from', and message body cannot be empty.")
+	mockCallSvc.AssertNotCalled(t, "SendSMS", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestSmsElement_Execute_Validation_EmptyFrom(t *testing.T) {
+	_, mockCtx, mockEsl, mockCallSvc := setupTestMocks(t)
+	smsElement := domain.SmsElement{To: "to_num", From: " ", Body: "Test Body"}
+	mockCtx.On("GetAccountSid").Maybe().Return("AC123")
+	result := smsElement.Execute(mockCtx, mockEsl, mockCallSvc)
+	assert.Equal(t, domain.ActionError, result.Action)
+	assert.EqualError(t, result.Err, "SmsElement: 'to', 'from', and message body cannot be empty.")
+}
+
+func TestSmsElement_Execute_Validation_EmptyBody(t *testing.T) {
+	_, mockCtx, mockEsl, mockCallSvc := setupTestMocks(t)
+	smsElement := domain.SmsElement{To: "to_num", From: "from_num", Body: "   "}
+	mockCtx.On("GetAccountSid").Maybe().Return("AC123")
+	result := smsElement.Execute(mockCtx, mockEsl, mockCallSvc)
+	assert.Equal(t, domain.ActionError, result.Action)
+	assert.EqualError(t, result.Err, "SmsElement: 'to', 'from', and message body cannot be empty.")
+}
+
+func TestSmsElement_Execute_Validation_NoAccountSid(t *testing.T) {
+	_, mockCtx, mockEsl, mockCallSvc := setupTestMocks(t)
+	smsElement := domain.SmsElement{To: "to_num", From: "from_num", Body: "Valid body"}
+	mockCtx.On("GetAccountSid").Return("").Once() // Empty Account SID
+	result := smsElement.Execute(mockCtx, mockEsl, mockCallSvc)
+	assert.Equal(t, domain.ActionError, result.Action)
+	assert.EqualError(t, result.Err, "SmsElement: AccountSID is missing from context.")
+	mockCallSvc.AssertNotCalled(t, "SendSMS", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
 
 // Ensure all mocks are asserted
 func TestMain(m *testing.M) {
-	// This is a placeholder
 	m.Run()
 }
+
+[end of agbaravoip_golang/internal/domain/call_control_test.go]

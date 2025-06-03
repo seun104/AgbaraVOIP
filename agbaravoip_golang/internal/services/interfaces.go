@@ -17,6 +17,7 @@ type IApplicationService interface {
 	ListApplications(accountSid string) ([]*domain.Application, error)
 	UpdateApplication(accountSid string, appSid string, updates map[string]interface{}) (*domain.Application, error)
 	DeleteApplication(accountSid string, appSid string) error
+	GetApplicationByIncomingDID(ctx context.Context, did string) (*domain.Application, error)
 }
 
 type ICallService interface {

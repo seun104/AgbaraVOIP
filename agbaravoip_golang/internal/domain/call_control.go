@@ -30,6 +30,7 @@ const (
 	ActionPause    CallControlAction = "Pause"  // Added for PauseElement
 	ActionDial     CallControlAction = "Dial"   // Added for DialElement
 	ActionConference CallControlAction = "Conference" // Added for ConferenceElement
+	ActionSms      CallControlAction = "Sms"      // Added for SmsElement
 )
 
 // CallControlResult defines the outcome of executing a call control element.
@@ -478,6 +479,86 @@ func (c *ConferenceElement) Execute(ctx MinimalCallContext, eslConn EslConnectio
 	}
 
 	logger.Infof("ConferenceElement: Successfully left conference '%s'.", c.RoomName)
+	return CallControlResult{Action: ActionContinue}
+}
+
+// SmsElement Structure
+type SmsElement struct {
+	XMLName        xml.Name `xml:"Sms"`
+	To             string   `xml:"to,attr"`                     // Recipient phone number
+	From           string   `xml:"from,attr"`                   // Sender phone number (or alphanumeric sender ID)
+	Body           string   `xml:",chardata"`                 // Message content
+	ActionURL      string   `xml:"action,attr,omitempty"`       // URL for status updates (e.g., sent, failed)
+	Method         string   `xml:"method,attr,omitempty"`       // Method for ActionURL (GET or POST)
+	StatusCallback string   `xml:"statusCallback,attr,omitempty"` // Alias for ActionURL for compatibility
+}
+
+func (s *SmsElement) GetType() CallControlAction { return ActionSms }
+
+func (s *SmsElement) GetActionURL() string {
+	if s.ActionURL != "" {
+		return s.ActionURL
+	}
+	return s.StatusCallback // Fallback to StatusCallback
+}
+
+func (s *SmsElement) GetMethod() string {
+	if s.Method == "" {
+		return "POST" // Default to POST for callbacks
+	}
+	return s.Method
+}
+
+func (s *SmsElement) Execute(ctx MinimalCallContext, eslConn EslConnectionExecutor, callSvc CallServicerForESL) CallControlResult {
+	logger := ctx.Log()
+	if logger == nil {
+		return CallControlResult{Action: ActionError, Err: errors.New("logger nil in SmsElement.Execute")}
+	}
+
+	trimmedTo := strings.TrimSpace(s.To)
+	trimmedFrom := strings.TrimSpace(s.From)
+	trimmedBody := strings.TrimSpace(s.Body)
+
+	if trimmedTo == "" || trimmedFrom == "" || trimmedBody == "" {
+		errMsg := "SmsElement: 'to', 'from', and message body cannot be empty."
+		logger.Error(errMsg)
+		return CallControlResult{Action: ActionError, Err: errors.New(errMsg)}
+	}
+
+	accountSid := ctx.GetAccountSid()
+	if accountSid == "" {
+		errMsg := "SmsElement: AccountSID is missing from context."
+		logger.Error(errMsg)
+		return CallControlResult{Action: ActionError, Err: errors.New(errMsg)}
+	}
+
+	smsSid := utils.GenerateSID("SM")
+
+	logger.Infof("SmsElement: Attempting to send SMS SID %s from '%s' to '%s'. ActionURL: '%s'",
+		smsSid, trimmedFrom, trimmedTo, s.GetActionURL())
+
+	// The context passed to SendSMS here is the MinimalCallContext from the call control flow.
+	// The SMSService implementation might use context.Background() or its own context for DB/gateway calls.
+	// For now, using context.Background() for the service call as callSvc.SendSMS expects context.Context.
+	// If SMSService methods were updated to take MinimalCallContext directly, this would be simpler.
+	// However, service layer methods typically take context.Context for broader use.
+	// This means ctx (MinimalCallContext) cannot be directly passed if SendSMS expects context.Context.
+	// We'll use context.Background() as a placeholder for the service call context.
+	// This point highlights a potential area for interface consistency across service layers.
+	// For this implementation, we assume CallServicerForESL's SendSMS matches the SMSService interface,
+	// which takes context.Context.
+
+	// The current CallServicerForESL interface was updated to use context.Context for SMS methods.
+	// So, we need to pass a context.Context. MinimalCallContext (ctx) is not context.Context.
+	// We use context.Background() here.
+	_, err := callSvc.SendSMS(context.Background(), accountSid, trimmedTo, trimmedFrom, trimmedBody, smsSid, s.GetActionURL(), s.GetMethod())
+
+	if err != nil {
+		logger.Errorf("SmsElement: Failed to send SMS SID %s: %v", smsSid, err)
+		return CallControlResult{Action: ActionError, Err: fmt.Errorf("sending SMS via service failed: %w", err)}
+	}
+
+	logger.Infof("SmsElement: SMS SID %s successfully queued/sent to gateway.", smsSid)
 	return CallControlResult{Action: ActionContinue}
 }
 

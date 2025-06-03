@@ -79,6 +79,11 @@ func (m *MockApplicationService) GetApplicationBySID(accountSid string, appSid s
 func (m *MockApplicationService) ListApplications(accountSid string) ([]*domain.Application, error) { args := m.Called(accountSid); if args.Get(0) == nil {return nil, args.Error(1)}; return args.Get(0).([]*domain.Application), args.Error(1) }
 func (m *MockApplicationService) UpdateApplication(accountSid string, appSid string, updates map[string]interface{}) (*domain.Application, error) { args := m.Called(accountSid, appSid, updates); if args.Get(0) == nil {return nil, args.Error(1)}; return args.Get(0).(*domain.Application), args.Error(1) }
 func (m *MockApplicationService) DeleteApplication(accountSid string, appSid string) error { args := m.Called(accountSid, appSid); return args.Error(0) }
+func (m *MockApplicationService) GetApplicationByIncomingDID(ctx context.Context, did string) (*domain.Application, error) {
+	args := m.Called(ctx, did)
+	if args.Get(0) == nil { return nil, args.Error(1) }
+	return args.Get(0).(*domain.Application), args.Error(1)
+}
 
 // MockFreeswitchOutboundConfigProvider is a mock for the config provider interface
 type MockFreeswitchOutboundConfigProvider struct { mock.Mock }

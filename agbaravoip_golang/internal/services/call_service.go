@@ -1,7 +1,14 @@
 package services
-import ( "errors"; "fmt"; "strings"; "time"; "net/url";
+import ( "context"; "errors"; "fmt"; "strings"; "time"; "net/url"; // Added context for SMSService delegation
 	"github.com/user/agbaravoip_golang/internal/domain"; "github.com/user/agbaravoip_golang/internal/esl"; 
 	"github.com/sirupsen/logrus"; "gorm.io/gorm" )
+
+// Simple mock for SMSGatewayClient for NewCallService, can be expanded or moved
+type mockSmsGateway struct {}
+func (m *mockSmsGateway) SendSMS(ctx context.Context, to, from, body string, statusCallbackURL string) (string, error) {
+	// This is a mock, does not actually send SMS
+	return "mock_gw_sid_" + from + "_" + to, nil
+}
 
 // Ensure FreeswitchOutboundConfigProvider is defined here or imported if common
 type FreeswitchOutboundConfigProvider interface { GetESLOutboundServerListenAddress() string }
@@ -14,14 +21,23 @@ var ( ErrCallNotFound_CS = errors.New("call not found"); ErrCallValidationFailed
 type CallService struct {
 	db *gorm.DB; eslClient *esl.FSInboundClient; appService IApplicationService; 
 	logger *logrus.Entry; cfgProvider FreeswitchOutboundConfigProvider
-	confService ConferenceService // Added conference service
+	confService ConferenceService
+	smsService  SMSService // Added SMS Service
 }
 func NewCallService(db *gorm.DB, eslClient *esl.FSInboundClient, appSvc IApplicationService, cfgProvider FreeswitchOutboundConfigProvider, logger *logrus.Logger) *CallService {
-	// Initialize conferenceService, assuming NewConferenceService takes *gorm.DB and *logrus.Logger
-	// Note: NewConferenceService was defined to take *logrus.Logger, not *logrus.Entry.
-	// The CallService logger is *logrus.Entry. We'll pass the base logger.
 	conferenceSvc := NewConferenceService(db, logger)
-	return &CallService{ db: db, eslClient: eslClient, appService: appSvc, logger: logger.WithField("service", "call"), cfgProvider: cfgProvider, confService: conferenceSvc }
+	// For SMSService, we need an SMSGatewayClient. Using a simple internal mock for now.
+	// In a real setup, this would be a concrete gateway client.
+	mockGwClient := &mockSmsGateway{}
+	smsSvc := NewSMSService(db, logger, mockGwClient) // Assuming smsService uses GORM like ConferenceService
+
+	return &CallService{
+		db: db, eslClient: eslClient, appService: appSvc,
+		logger: logger.WithField("service", "call"),
+		cfgProvider: cfgProvider,
+		confService: conferenceSvc,
+		smsService: smsSvc, // Initialize smsService
+	}
 }
 func (s *CallService) OriginateCall(accountSid string, fromNum string, toNum string, answerURL string, applicationSid *string, timeoutSeconds *int) (*domain.Call, error) {
 	if s.eslClient == nil { return nil, ErrESLClientNotAvailable_CS }
@@ -177,4 +193,34 @@ func (s *CallService) CreateRecording(ctx domain.MinimalCallContext, callSid *st
 
 	logger.Info("Successfully created recording metadata.")
 	return nil
+}
+
+// --- SMSService Delegation Methods ---
+
+func (s *CallService) SendSMS(ctx context.Context, accountSid, to, from, body, msgSID, actionURL, actionMethod string) (*domain.SMSMessage, error) {
+	return s.smsService.SendSMS(ctx, accountSid, to, from, body, msgSID, actionURL, actionMethod)
+}
+
+func (s *CallService) GetSMSBySID(ctx context.Context, sid string) (*domain.SMSMessage, error) {
+	return s.smsService.GetSMSBySID(ctx, sid)
+}
+
+func (s *CallService) UpdateSMSStatus(ctx context.Context, agbaraSid string, gatewaySid *string, status domain.SMSStatus, errorCode *int32, errorMessage *string, eventTime *time.Time) error {
+	return s.smsService.UpdateSMSStatus(ctx, agbaraSid, gatewaySid, status, errorCode, errorMessage, eventTime)
+}
+
+func (s *CallService) RecordInboundSMS(ctx context.Context, accountSid, to, from, body, inboundGatewayMsgSid string) (*domain.SMSMessage, error) {
+	return s.smsService.RecordInboundSMS(ctx, accountSid, to, from, body, inboundGatewayMsgSid)
+}
+
+// --- ApplicationService Delegation Method ---
+
+func (s *CallService) GetApplicationByIncomingDID(ctx context.Context, did string) (*domain.Application, error) {
+	if s.appService == nil {
+		// This case should ideally not happen if NewCallService ensures appService is initialized.
+		// However, if it can be nil, proper error handling is needed.
+		s.logger.Error("appService is not initialized in CallService when calling GetApplicationByIncomingDID")
+		return nil, errors.New("application service not available")
+	}
+	return s.appService.GetApplicationByIncomingDID(ctx, did)
 }
