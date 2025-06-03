@@ -107,4 +107,8 @@ type CallServicerForESL interface {
 
 	// Application service methods needed by handlers using CallServicerForESL
 	GetApplicationByIncomingDID(ctx context.Context, did string) (*Application, error)
+
+	// Account service methods (for auth, etc.)
+	ValidateCredentials(ctx context.Context, accountSid string, plainToken string) (*Account, error)
+	GetAccountBySID(ctx context.Context, sid string) (*Account, error) // Might be needed for other auth/user purposes
 }

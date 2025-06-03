@@ -19,24 +19,22 @@ var ( ErrCallNotFound_CS = errors.New("call not found"); ErrCallValidationFailed
 	ErrESLCommandFailed_CS = errors.New("ESL command failed"); ErrAppLogicError_CS = errors.New("app logic error for call"); )
 
 type CallService struct {
-	db *gorm.DB; eslClient *esl.FSInboundClient; appService IApplicationService; 
+	db *gorm.DB; eslClient *esl.FSInboundClient; appService IApplicationService; accountService IAccountService;
 	logger *logrus.Entry; cfgProvider FreeswitchOutboundConfigProvider
 	confService ConferenceService
-	smsService  SMSService // Added SMS Service
+	smsService  SMSService
 }
-func NewCallService(db *gorm.DB, eslClient *esl.FSInboundClient, appSvc IApplicationService, cfgProvider FreeswitchOutboundConfigProvider, logger *logrus.Logger) *CallService {
+func NewCallService(db *gorm.DB, eslClient *esl.FSInboundClient, appSvc IApplicationService, accSvc IAccountService, cfgProvider FreeswitchOutboundConfigProvider, logger *logrus.Logger) *CallService {
 	conferenceSvc := NewConferenceService(db, logger)
-	// For SMSService, we need an SMSGatewayClient. Using a simple internal mock for now.
-	// In a real setup, this would be a concrete gateway client.
 	mockGwClient := &mockSmsGateway{}
-	smsSvc := NewSMSService(db, logger, mockGwClient) // Assuming smsService uses GORM like ConferenceService
+	smsSvc := NewSMSService(db, logger, mockGwClient)
 
 	return &CallService{
-		db: db, eslClient: eslClient, appService: appSvc,
+		db: db, eslClient: eslClient, appService: appSvc, accountService: accSvc,
 		logger: logger.WithField("service", "call"),
 		cfgProvider: cfgProvider,
 		confService: conferenceSvc,
-		smsService: smsSvc, // Initialize smsService
+		smsService: smsSvc,
 	}
 }
 func (s *CallService) OriginateCall(accountSid string, fromNum string, toNum string, answerURL string, applicationSid *string, timeoutSeconds *int) (*domain.Call, error) {
@@ -223,4 +221,23 @@ func (s *CallService) GetApplicationByIncomingDID(ctx context.Context, did strin
 		return nil, errors.New("application service not available")
 	}
 	return s.appService.GetApplicationByIncomingDID(ctx, did)
+}
+
+// --- AccountService Delegation Methods ---
+
+func (s *CallService) ValidateCredentials(ctx context.Context, accountSid string, plainToken string) (*domain.Account, error) {
+	if s.accountService == nil {
+		s.logger.Error("accountService is not initialized in CallService when calling ValidateCredentials")
+		return nil, errors.New("account service not available")
+	}
+	return s.accountService.ValidateCredentials(ctx, accountSid, plainToken) // Pass context if IAccountService methods expect it
+}
+
+func (s *CallService) GetAccountBySID(ctx context.Context, sid string) (*domain.Account, error) {
+	if s.accountService == nil {
+		s.logger.Error("accountService is not initialized in CallService when calling GetAccountBySID")
+		return nil, errors.New("account service not available")
+	}
+	// Assuming IAccountService.GetAccountBySID does not take context. If it does, pass ctx.
+	return s.accountService.GetAccountBySID(sid)
 }

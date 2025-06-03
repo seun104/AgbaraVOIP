@@ -5,15 +5,148 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/user/agbaravoip_golang/internal/auth" // For JWT
 	"github.com/user/agbaravoip_golang/internal/services"
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v4" // For JWT error types
 	"github.com/sirupsen/logrus"
 )
 
+// ContextKey type for setting values in Gin context to avoid collisions
+type ContextKey string
+
 const (
-	ContextAuthAccountKey = "authenticated_account_sid"
-	// ContextAuthAccountObjectKey = "authenticated_account_object" // Optional: to store the full account object
+	// For Basic Auth
+	ContextAuthAccountKey ContextKey = "authenticated_account_sid"
+	// ContextAuthAccountObjectKey = "authenticated_account_object"
+
+	// For JWT Auth
+	ContextKeyAccountSID ContextKey = "jwt_account_sid" // Renamed to avoid conflict if both used (though unlikely)
+	ContextKeyUserRole   ContextKey = "jwt_user_role"
+	ContextKeyClaims     ContextKey = "jwt_claims"
 )
+
+// AccountAccessMiddleware ensures that the AccountSID from the JWT token
+// matches the :account_sid path parameter.
+// It should be placed AFTER JWTMiddleware in the middleware chain.
+func AccountAccessMiddleware(logger *logrus.Entry) gin.HandlerFunc {
+    var log *logrus.Entry
+	if logger != nil {
+		log = logger.WithField("middleware", "account_access_check")
+	} else {
+		defaultLogger := logrus.New()
+		log = logrus.NewEntry(defaultLogger).WithField("middleware", "account_access_check")
+		log.Warn("AccountAccessMiddleware initialized with no logger provided, using default logrus instance.")
+	}
+
+    return func(c *gin.Context) {
+        tokenAccountSID, exists := c.Get(string(ContextKeyAccountSID)) // Using the JWT specific key
+        if !exists {
+            log.Error("AccountAccessMiddleware: AccountSID not found in JWT claims (JWTMiddleware should run first)")
+            c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "Access forbidden: missing token claims"})
+            return
+        }
+
+        tokenAccountSIDStr, ok := tokenAccountSID.(string)
+        if !ok || tokenAccountSIDStr == "" {
+            log.Error("AccountAccessMiddleware: AccountSID in token is invalid or empty")
+            c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "Access forbidden: invalid token claims"})
+            return
+        }
+
+        pathAccountSID := c.Param("account_sid")
+        if pathAccountSID == "" {
+            log.Warn("AccountAccessMiddleware: :account_sid path parameter missing from route definition. Skipping check.")
+            c.Next()
+            return
+        }
+
+        if tokenAccountSIDStr != pathAccountSID {
+            log.Warnf("Forbidden access attempt: Token AccountSID '%s' does not match Path AccountSID '%s'", tokenAccountSIDStr, pathAccountSID)
+            c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "Access forbidden: you cannot access resources of another account."})
+            return
+        }
+
+        log.Debugf("AccountAccessMiddleware: Access granted for AccountSID '%s' to path '%s'", tokenAccountSIDStr, c.Request.URL.Path)
+        c.Next()
+    }
+}
+
+
+// JWTMiddleware creates a Gin middleware for JWT authentication.
+func JWTMiddleware(logger *logrus.Entry) gin.HandlerFunc {
+	if !auth.IsJWTSecretInitialized() {
+		if logger != nil {
+			logger.Fatal("CRITICAL: JWT Authentication Middleware loaded but JWT secret key is not initialized!")
+		} else {
+			logrus.Fatal("CRITICAL: JWT Authentication Middleware loaded but JWT secret key is not initialized!")
+		}
+		return func(c *gin.Context) {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "JWT system not configured"})
+		}
+	}
+
+	var log *logrus.Entry
+	if logger != nil {
+		log = logger.WithField("middleware", "jwt_auth")
+	} else {
+		defaultLogger := logrus.New()
+		log = logrus.NewEntry(defaultLogger).WithField("middleware", "jwt_auth")
+		log.Warn("JWTMiddleware initialized with no logger provided, using default logrus instance.")
+	}
+
+	return func(c *gin.Context) {
+		authHeader := c.GetHeader("Authorization")
+		if authHeader == "" {
+			log.Debug("Authorization header missing")
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Authorization header required"})
+			return
+		}
+
+		parts := strings.SplitN(authHeader, " ", 2)
+		if !(len(parts) == 2 && strings.ToLower(parts[0]) == "bearer") {
+			log.Debug("Authorization header format must be Bearer {token}")
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Authorization header format must be Bearer {token}"})
+			return
+		}
+
+		tokenString := parts[1]
+		if tokenString == "" {
+			log.Debug("Bearer token missing")
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Bearer token missing"})
+			return
+		}
+
+		claims, err := auth.ValidateToken(tokenString)
+		if err != nil {
+			log.Warnf("Token validation failed: %v", err)
+			if ve, ok := err.(*jwt.ValidationError); ok {
+				if ve.Errors&jwt.ValidationErrorMalformed != 0 {
+					c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Malformed token"})
+					return
+				} else if ve.Errors&jwt.ValidationErrorExpired != 0 {
+					c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Token is expired"})
+					return
+				} else if ve.Errors&jwt.ValidationErrorNotValidYet != 0 {
+					c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Token not active yet"})
+					return
+				}
+			}
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
+			return
+		}
+
+		c.Set(string(ContextKeyClaims), claims)
+		c.Set(string(ContextKeyAccountSID), claims.AccountSID) // Uses the new jwt_account_sid
+		if claims.Role != "" {
+			c.Set(string(ContextKeyUserRole), claims.Role)
+		}
+
+		log.Debugf("JWT authentication successful for AccountSID: %s, Role: %s", claims.AccountSID, claims.Role)
+		c.Next()
+	}
+}
+
 
 // BasicAuthMiddleware creates a middleware for HTTP Basic Authentication.
 func BasicAuthMiddleware(accountService services.IAccountService, logger *logrus.Logger) gin.HandlerFunc {
