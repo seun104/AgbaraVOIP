@@ -60,3 +60,61 @@ func (s *CallService) UpdateCallStatus(agbaraCallSid string, status domain.CallS
 	s.db.Where("sid = ?", agbaraCallSid).First(&call); s.logger.Infof("Call %s status updated to %s", call.SID, call.Status); return &call, nil
 }
 
+// LogNullString is a helper for logging nullable strings.
+func LogNullString(ns *string) string {
+	if ns == nil {
+		return "<nil>"
+	}
+	return *ns
+}
+
+func (s *CallService) CreateRecording(ctx domain.MinimalCallContext, callSid *string, recordingSid, filePath string, duration uint32, format string, sizeBytes int64) error {
+	logger := s.logger.WithFields(logrus.Fields{
+		"service_method": "CreateRecording",
+		"recording_sid":  recordingSid,
+		"call_sid":       LogNullString(callSid),
+		"account_sid":    ctx.GetAccountSid(),
+	})
+	logger.Infof("Creating recording metadata for file: %s, duration: %ds", filePath, duration)
+
+	// Using GORM Create method with the domain.Recording struct
+	// This assumes domain.Recording struct is defined and has correct `gorm` tags if needed,
+	// or relies on GORM's column name mapping. The prompt used `db` tags for sqlx.
+	// For GORM, it's often `gorm:"column:column_name"` or direct field name mapping.
+	// Given the SQL in the prompt, we'll use raw SQL with GORM's Exec for now to match the prompt's query structure.
+	// A more GORM-idiomatic way would be:
+	// recording := domain.Recording{ /* populate fields */ }
+	// if err := s.db.Create(&recording).Error; err != nil { ... }
+	// However, to stick closer to the provided SQL query structure:
+
+	query := `INSERT INTO recordings (sid, account_sid, call_sid, duration_seconds, file_path, format, size_bytes, created_at, updated_at)
+			  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	now := time.Now().UTC()
+
+	// GORM's Exec method typically doesn't return rows, just error.
+	// It also doesn't directly use context.Background() in the Exec call itself for older GORM.
+	// For newer GORM, s.db.WithContext(context.Background()).Exec(...) is preferred.
+	// Sticking to s.db.Exec for simplicity if WithContext isn't readily usable or version is unknown.
+	// The prompt used db.ExecContext which is more like sqlx or database/sql.
+	// Adapting to common GORM raw SQL execution:
+	err := s.db.Exec(query,
+		recordingSid,
+		ctx.GetAccountSid(),
+		callSid,
+		duration,
+		filePath,
+		format,
+		sizeBytes,
+		now,
+		now,
+	).Error
+
+	if err != nil {
+		logger.Errorf("Error inserting recording metadata into DB: %v", err)
+		return fmt.Errorf("inserting recording: %w", err)
+	}
+
+	logger.Info("Successfully created recording metadata.")
+	return nil
+}

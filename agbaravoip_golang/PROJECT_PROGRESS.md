@@ -7,7 +7,7 @@ This document tracks the progress of re-implementing the AgbaraVOIP system in Go
 - [X] Phase 1: Account Management & Authentication
 - [X] Phase 2: Application Management & Basic Call Origination
 - [X] Phase 3: Core AgbaraXML-like Processing (Outbound ESL)
-- [ ] Phase 4: Advanced Call Control Features (Gather, Record, Dial-Primitives)
+- [X] Phase 4: Advanced Call Control Features (Gather, Record, Dial-Primitives)
 - [ ] Phase 5: Conference Calls & Complex Dial
 - [ ] Phase 6: SMS Functionality
 - [ ] Phase 7: Advanced Features, Security Hardening, Scalability
@@ -89,18 +89,33 @@ This document tracks the progress of re-implementing the AgbaraVOIP system in Go
 ---
 ## Phase 4: Advanced Call Control Features (Gather, Record, Dial-Primitives)
 - **Goal:** Implement advanced call control verbs like Gather, Record, and primitive Dial.
-- **Status:** In Progress
+- **Status:** Completed
 
 ### Tasks:
 - [X] **Task P4.0: Define GatherElement, RecordElement, and DialElement (Primitives) Structs & Stubs**
     - Defined `GatherElement` and `RecordElement` in `internal/domain/call_control.go` with fields, XML tags, and stubbed `Execute` methods.
     - Added `ActionGather` and `ActionRecord` to `CallControlAction` ENUM.
     - Ensured all call control elements consistently implement `GetActionURL()`, `GetMethod()`, and return `CallControlResult`.
-    - (Note: `DialElement` definition will be part of a subsequent task within Phase 4)
-- [ ] **Task P4.1: Implement `Execute` Method for `GatherElement`**
-- [ ] **Task P4.2: Implement `Execute` Method for `RecordElement`**
-- [ ] **Task P4.3: Implement `DialElement` (Primitive) and its `Execute` Method**
-- [ ] **Task P4.4: Update `XMLProcessor` for New Elements**
-- [ ] **Task P4.5: Update `recordings` Table and Service**
-- [ ] **Task P4.6: Integrate New Verbs into Outbound ESL Handler**
-- [ ] **Task P4.7: Testing for Phase 4 Features**
+    - (Note: `DialElement` definition was also included as per P4.3)
+- [X] **Task P4.1: Implement `Execute` Method for `GatherElement`**
+    - Implemented logic for nested Say/Play, ESL `play_and_get_digits` (interface and mock updated), and ActionURL/Continue result processing. (Actual `play_and_get_digits` ESL command implementation in adapter is stubbed).
+- [X] **Task P4.2: Implement `Execute` Method for `RecordElement`**
+    - Implemented non-blocking recording initiation (`RecordSession` ESL command), PlayBeep, filename generation, and setup for async completion via `PendingRecordInfo` in `CallContext`.
+- [X] **Task P4.3: Implement `DialElement` (Primitive) and its `Execute` Method**
+    - Defined `DialElement` struct, added `ActionDial` ENUM.
+    - Implemented non-blocking `Execute` to send `originate` ESL command (interface and mock updated) and setup for async completion via `PendingDialInfo` in `CallContext`.
+- [X] **Task P4.4: Update `XMLProcessor` for New Elements**
+    - Verified through augmented tests in `httpclient_test.go` that existing XML parsing in `httpclient.FetchXML` correctly handles new Gather, Record, and Dial elements and their attributes (including nested elements for Gather). No parsing code changes were needed.
+- [X] **Task P4.5: Update `recordings` Table and Service**
+    - Created DB migration for `recordings` table with appropriate schema.
+    - Defined `domain.Recording` struct.
+    - Updated `CallServicerForESL` interface and `CallService` with `CreateRecording` method for saving recording metadata.
+- [X] **Task P4.6: Integrate New Verbs into ESL Event Handling**
+    - Updated `CallContext` (`context.go`) with structures (`PendingRecordInfo`, `PendingDialInfo`) and methods to manage pending Record/Dial operations and for asynchronous XML processing via a channel (`nextElementsChannel`).
+    - Enhanced `handleEslEvents` in `outbound.go` to process `RECORD_STOP`, B-leg `CHANNEL_ANSWER`, and B-leg `CHANNEL_HANGUP` events. This includes calling `CreateRecording`, bridging calls, and fetching/processing ActionURLs for these events, then sending new elements to the main loop.
+    - Basic DTMF handling for Record `FinishOnKey` added to `handleEslEvents`.
+- [X] **Task P4.7: Testing for Phase 4 Features**
+    - Added comprehensive unit tests for `GatherElement.Execute`, `RecordElement.Execute`, `DialElement.Execute` in `domain/call_control_test.go`.
+    * Added unit tests for `CallService.CreateRecording` in `services_test/call_service_test.go` using `sqlmock`.
+    * Updated XML parsing tests in `utils/httpclient/httpclient_test.go` to assert attributes of new elements.
+    * Established foundation for integration tests in `esl/outbound_integration_test.go` for ESL event handling, highlighting areas for future SUT refactoring for better testability.

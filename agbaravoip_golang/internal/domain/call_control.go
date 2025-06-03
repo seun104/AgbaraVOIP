@@ -4,9 +4,11 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"path/filepath" // For generating file paths
 	"strings"
-	// "time" // No direct usage of time in this file anymore
+	"time" // For unique filenames
 
+	"github.com/user/agbaravoip_golang/internal/callcontrol" // For Pending structs
 	// "github.com/fiorix/go-eventsocket/eventsocket" // No longer needed here, EslConnectionExecutor is in this package (interfaces file)
 	"github.com/sirupsen/logrus"
 )
@@ -24,6 +26,7 @@ const (
 	ActionSay      CallControlAction = "Say"    // Added for SayElement
 	ActionPlay     CallControlAction = "Play"   // Added for PlayElement
 	ActionPause    CallControlAction = "Pause"  // Added for PauseElement
+	ActionDial     CallControlAction = "Dial"   // Added for DialElement
 )
 
 // CallControlResult defines the outcome of executing a call control element.
@@ -129,10 +132,156 @@ func (r *RecordElement) GetMethod() string {
 
 func (r *RecordElement) Execute(ctx MinimalCallContext, eslConn EslConnectionExecutor, callSvc CallServicerForESL) CallControlResult {
 	logger := ctx.Log()
-	if logger == nil { return CallControlResult{Action: ActionError, Err: errors.New("logger nil in RecordElement.Execute")} }
-	logger.Info("RecordElement Execute called (not yet implemented)")
-	// Implementation for Record will be added in a later step
-	return CallControlResult{Action: ActionContinue, Err: errors.New("RecordElement.Execute not implemented")}
+	if logger == nil {
+		return CallControlResult{Action: ActionError, Err: errors.New("logger nil in RecordElement.Execute")}
+	}
+
+	// 1. Determine recording parameters
+	fileName := fmt.Sprintf("%s_%d", ctx.GetUuid(), time.Now().UnixNano())
+	fileFormat := "wav" // Default format
+	if r.FileFormat != "" {
+		// Basic validation for common formats, can be expanded
+		if r.FileFormat == "wav" || r.FileFormat == "mp3" {
+			fileFormat = r.FileFormat
+		} else {
+			logger.Warnf("Record: Unsupported file format '%s', defaulting to 'wav'.", r.FileFormat)
+		}
+	}
+	fileNameWithFormat := fmt.Sprintf("%s.%s", fileName, fileFormat)
+
+	baseRecPath := "/var/lib/freeswitch/recordings/" // Placeholder - THIS MUST BE CONFIGURABLE
+	fullFilePath := filepath.Join(baseRecPath, ctx.GetAccountSid(), fileNameWithFormat) // Store in account-specific subfolder
+
+	logger.Infof("Executing Record: FilePath='%s', MaxLength=%ds, FinishOnKey='%s', PlayBeep=%t, Format='%s'",
+		fullFilePath, r.MaxLengthSeconds, r.FinishOnKey, r.PlayBeep, fileFormat)
+
+	// 2. Play beep if requested
+	if r.PlayBeep {
+		logger.Info("Record: Playing beep.")
+		_, err := eslConn.Execute("playback", "tone_stream://%(1000,0,640)") // Standard FS beep
+		if err != nil {
+			logger.Warnf("Record: Failed to play beep: %v", err)
+		}
+	}
+
+	// 3. Start recording (non-blocking)
+	maxLength := uint32(0)
+	if r.MaxLengthSeconds > 0 {
+		maxLength = uint32(r.MaxLengthSeconds)
+	}
+
+	silenceThreshold := uint(0)
+	silenceHits := uint(0)
+
+	logger.Infof("Record: Calling eslConn.RecordSession: Path='%s', MaxLength=%d", fullFilePath, maxLength)
+	_, err := eslConn.RecordSession(fullFilePath, maxLength, silenceThreshold, silenceHits)
+
+	if err != nil {
+		logger.Errorf("Record: Failed to start recording session for file '%s': %v", fullFilePath, err)
+		return CallControlResult{Action: ActionError, Err: fmt.Errorf("failed to start recording: %w", err)}
+	}
+
+	logger.Infof("Record: Recording started to %s. MaxLength: %d. FinishOnKey: '%s'. PlayBeep: %t. Format: %s",
+		fullFilePath, r.MaxLengthSeconds, r.FinishOnKey, r.PlayBeep, fileFormat)
+
+	// Use the new context methods for pending operations
+	pendingRecInfo := callcontrol.PendingRecordInfo{
+		OriginalElement:  r,
+		ExpectedFilePath: fullFilePath,
+	}
+	ctx.SetPendingRecording(pendingRecInfo) // Pass the concrete type, context method takes interface{}
+	logger.Info("Record: Pending recording info set in call context.")
+
+	return CallControlResult{Action: ActionContinue}
+}
+
+// DialElement Structure
+type DialElement struct {
+	XMLName        xml.Name `xml:"Dial"`
+	ActionURL      string   `xml:"action,attr,omitempty"`      // URL to POST to after dial attempt completion
+	Method         string   `xml:"method,attr,omitempty"`      // Method for ActionURL (GET or POST)
+	CallerID       string   `xml:"callerId,attr,omitempty"`    // Caller ID for the outbound leg
+	CalleeIDToDial string   `xml:",chardata"`                  // The number, SIP URI, or user to dial
+	TimeoutSeconds int      `xml:"timeout,attr,omitempty"`     // Ringing timeout for the new leg in seconds
+	HangupOnStar   bool     `xml:"hangupOnStar,attr,omitempty"`// If true, receiving '*' on this leg hangs up the other leg(s)
+}
+
+func (d *DialElement) GetType() CallControlAction { return ActionDial }
+
+func (d *DialElement) GetActionURL() string {
+	return d.ActionURL
+}
+
+func (d *DialElement) GetMethod() string {
+	if d.Method == "" {
+		return "POST" // Default to POST
+	}
+	return d.Method
+}
+
+func (d *DialElement) Execute(ctx MinimalCallContext, eslConn EslConnectionExecutor, callSvc CallServicerForESL) CallControlResult {
+	logger := ctx.Log()
+	if logger == nil {
+		return CallControlResult{Action: ActionError, Err: errors.New("logger nil in DialElement.Execute")}
+	}
+
+	if strings.TrimSpace(d.CalleeIDToDial) == "" {
+		logger.Error("Dial: CalleeIDToDial is empty.")
+		return CallControlResult{Action: ActionError, Err: errors.New("Dial CalleeIDToDial is empty")}
+	}
+
+	logger.Infof("Executing Dial: Callee='%s', CallerID='%s', Timeout=%ds, ActionURL='%s'",
+		d.CalleeIDToDial, d.CallerID, d.TimeoutSeconds, d.ActionURL)
+
+	var dialString string
+	if strings.Contains(d.CalleeIDToDial, "@") {
+		dialString = fmt.Sprintf("sofia/internal/%s", d.CalleeIDToDial)
+	} else {
+		dialString = fmt.Sprintf("user/%s", d.CalleeIDToDial)
+	}
+
+	originateVars := make(map[string]string)
+
+	effectiveCallerID := ctx.GetVariable("caller_id_number")
+	if d.CallerID != "" {
+		effectiveCallerID = d.CallerID
+	}
+	if effectiveCallerID != "" {
+		originateVars["origination_caller_id_number"] = effectiveCallerID
+	}
+
+	if d.TimeoutSeconds > 0 {
+		originateVars["originate_timeout"] = fmt.Sprintf("%d", d.TimeoutSeconds)
+	} else {
+		originateVars["originate_timeout"] = "60"
+	}
+
+	originateVars["agbara_parent_call_sid"] = ctx.GetUuid()
+	originateVars["agbara_dial_action_url"] = d.GetActionURL()
+	originateVars["agbara_dial_action_method"] = d.GetMethod()
+	originateVars["agbara_dial_hangup_on_star"] = fmt.Sprintf("%t", d.HangupOnStar)
+	// originateVars["accountcode"] = ctx.GetAccountSid() // Example for billing
+
+	logger.Infof("Dial: Calling eslConn.Originate: DialString='%s', VarsMapLength=%d", dialString, len(originateVars))
+
+	newChannelUUID, err := eslConn.Originate(dialString, originateVars)
+
+	if err != nil {
+		logger.Errorf("Dial: Failed to send originate command for '%s': %v", dialString, err)
+		return CallControlResult{Action: ActionError, Err: fmt.Errorf("failed to send originate command: %w", err)}
+	}
+
+	logger.Infof("Dial: Originate command sent for '%s'. New potential Channel UUID: %s. Waiting for async outcome.", dialString, newChannelUUID)
+
+	// Use the new context methods for pending operations
+	pendingDialInfo := callcontrol.PendingDialInfo{
+		OriginalElement:     d,
+		ParentAgbaraCallSID: ctx.GetUuid(),
+	}
+	ctx.AddPendingDial(newChannelUUID, pendingDialInfo) // Pass the concrete type
+	logger.Info("Dial: Pending dial operation registered in call context for new UUID: %s", newChannelUUID)
+
+	return CallControlResult{Action: ActionContinue}
 }
 
 type SayElement struct {

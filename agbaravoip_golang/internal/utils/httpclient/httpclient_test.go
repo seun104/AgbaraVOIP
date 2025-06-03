@@ -211,3 +211,74 @@ func TestFetchXML_POST_NoParams(t *testing.T) {
     assert.True(t, ok)
     assert.Equal(t, "POST No Params", sayElement.Text)
 }
+
+func TestFetchXML_WithAllVerbs(t *testing.T) {
+	serverXML := `<Response>
+	<Say>Test</Say>
+	<Gather action="/gather_action" method="POST" timeout="10" finishOnKey="#" numDigits="5">
+		<Play>enter_digits.wav</Play>
+	</Gather>
+	<Record action="/record_action" maxLength="30" playBeep="true" format="mp3"/>
+	<Dial action="/dial_action" callerId="12345" timeoutSeconds="45" hangupOnStar="true">1234567890</Dial>
+</Response>`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprintln(w, serverXML)
+	}))
+	defer server.Close()
+
+	respElement, err := httpclient.FetchXML(context.Background(), nil, server.URL, http.MethodGet, nil, nil, newTestLogger())
+
+	assert.NoError(t, err)
+	assert.NotNil(t, respElement)
+	if respElement == nil {
+		t.FailNow() // Avoid nil pointer dereference below
+	}
+	assert.Len(t, respElement.Verbs, 4) // Say, Gather, Record, Dial
+
+	// 1. SayElement
+	sayElem, ok := respElement.Verbs[0].(*domain.SayElement)
+	assert.True(t, ok, "Expected SayElement at index 0")
+	if ok {
+		assert.Equal(t, "Test", sayElem.Text)
+	}
+
+	// 2. GatherElement
+	gatherElem, ok := respElement.Verbs[1].(*domain.GatherElement)
+	assert.True(t, ok, "Expected GatherElement at index 1")
+	if ok {
+		assert.Equal(t, "/gather_action", gatherElem.ActionURL)
+		assert.Equal(t, "POST", gatherElem.Method)
+		assert.Equal(t, 10, gatherElem.TimeoutSeconds)
+		assert.Equal(t, "#", gatherElem.FinishOnKey)
+		assert.Equal(t, 5, gatherElem.NumDigits) // Assert numDigits
+		assert.NotNil(t, gatherElem.Play, "Gather should have a nested Play element")
+		if gatherElem.Play != nil {
+			assert.Equal(t, "enter_digits.wav", gatherElem.Play.URL)
+		}
+		assert.Nil(t, gatherElem.Say, "Gather should not have a nested Say element in this test case")
+	}
+
+	// 3. RecordElement
+	recordElem, ok := respElement.Verbs[2].(*domain.RecordElement)
+	assert.True(t, ok, "Expected RecordElement at index 2")
+	if ok {
+		assert.Equal(t, "/record_action", recordElem.ActionURL)
+		assert.Equal(t, 30, recordElem.MaxLengthSeconds)
+		assert.True(t, recordElem.PlayBeep)
+		assert.Equal(t, "mp3", recordElem.FileFormat) // Assert format
+	}
+
+	// 4. DialElement
+	dialElem, ok := respElement.Verbs[3].(*domain.DialElement)
+	assert.True(t, ok, "Expected DialElement at index 3")
+	if ok {
+		assert.Equal(t, "/dial_action", dialElem.ActionURL)
+		assert.Equal(t, "1234567890", dialElem.CalleeIDToDial)
+		assert.Equal(t, "12345", dialElem.CallerID)          // Assert callerId
+		assert.Equal(t, 45, dialElem.TimeoutSeconds)     // Assert timeoutSeconds
+		assert.True(t, dialElem.HangupOnStar)             // Assert hangupOnStar
+	}
+}
