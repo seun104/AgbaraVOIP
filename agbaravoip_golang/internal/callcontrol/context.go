@@ -1,50 +1,94 @@
 package callcontrol
 
 import (
-	"fmt" 
-	"github.com/fiorix/go-eventsocket/eventsocket"
-	"github.com/sirupsen/logrus" 
+	"sync"
+
+	"github.com/user/agbaravoip_golang/internal/domain" // Corrected import path
+	"github.com/sirupsen/logrus"
 )
 
+// CallContext holds all necessary information and state for a single call leg
+// being controlled by the application via Freeswitch Outbound ESL.
 type CallContext struct {
-	FreeswitchUUID      string 
-	AgbaraAccountSID    string 
-	AgbaraCallSID       string 
-	AnswerURL           string 
-	FromNum             string
-	ToNum               string 
-	ChannelState        string
-	Variables           map[string]string 
-	ESLConnection       *eventsocket.Connection 
-	Logger              *logrus.Entry 
+	uuid              string
+	accountSid        string
+	applicationSid    string
+	answerURL         string
+	variables         map[string]string
+	logger            *logrus.Entry
+	eslConnection     domain.EslConnectionExecutor // Changed to interface
+	hangupInitiated   bool
+	mutex             sync.Mutex
 }
 
-func NewCallContext(connectEvent *eventsocket.Event, eslConn *eventsocket.Connection, baseLogger *logrus.Logger) (*CallContext, error) {
-	fsUUID := connectEvent.Get("Channel-Call-UUID"); if fsUUID == "" { fsUUID = connectEvent.Get("Unique-ID") }
-	if fsUUID == "" { return nil, fmt.Errorf("FS UUID missing") }
-	
-	agbaraCallSID := connectEvent.Get("variable_agbara_call_sid")
-	callLogger := baseLogger.WithFields(logrus.Fields{ "fs_uuid": fsUUID, "call_sid": agbaraCallSID })
+// NewCallContext creates a new CallContext.
+// The eslConnection parameter should be an object that satisfies domain.EslConnectionExecutor.
+func NewCallContext(uuid, accountSid, appSid, answerURL string, vars map[string]string, eslConn domain.EslConnectionExecutor, baseLogger *logrus.Logger) *CallContext {
+	logger := baseLogger.WithFields(logrus.Fields{
+		"call_uuid": uuid,
+		"account_sid": accountSid,
+	})
+	logger.Info("Creating new call context")
 
-	ctx := &CallContext{
-		FreeswitchUUID:   fsUUID, AgbaraAccountSID: connectEvent.Get("variable_agbara_account_sid"),
-		AgbaraCallSID:    agbaraCallSID, AnswerURL: connectEvent.Get("variable_agbara_answer_url"),
-		FromNum:          connectEvent.Get("Caller-Caller-ID-Number"), ToNum: connectEvent.Get("Caller-Destination-Number"),
-		ChannelState:     connectEvent.Get("Channel-State"), Variables: make(map[string]string),
-		ESLConnection:    eslConn, Logger: callLogger,
+	return &CallContext{
+		uuid:              uuid,
+		accountSid:        accountSid,
+		applicationSid:    appSid,
+		answerURL:         answerURL,
+		variables:         vars,
+		logger:            logger,
+		eslConnection:     eslConn,
+		hangupInitiated:   false,
 	}
-	
-	// Simplified header processing using connectEvent.Get(key)
-	if connectEvent.Header != nil {
-		for key := range connectEvent.Header {
-			// Get() returns the first value for a header key, which is usually what's needed.
-			// This avoids the compiler confusion with iterating over map[string][]string values directly.
-			ctx.Variables[key] = connectEvent.Get(key)
-		}
-	}
-	
-	return ctx, nil
 }
-func (c *CallContext) GetFreeswitchUUID() string { return c.FreeswitchUUID }
-func (c *CallContext) GetAgbaraCallSID() string  { return c.AgbaraCallSID }
-func (c *CallContext) GetLoggerEntry() *logrus.Entry { return c.Logger }
+
+// Log returns the logger associated with this call context.
+func (cc *CallContext) Log() *logrus.Entry {
+	return cc.logger
+}
+
+// GetUuid returns the Freeswitch channel UUID for this call.
+func (cc *CallContext) GetUuid() string {
+	return cc.uuid
+}
+
+// GetAccountSid returns the Account SID associated with this call.
+func (cc *CallContext) GetAccountSid() string {
+	return cc.accountSid
+}
+
+// GetApplicationSid returns the Application SID that is handling this call.
+func (cc *CallContext) GetApplicationSid() string {
+	return cc.applicationSid
+}
+
+// GetAnswerURL returns the initial Answer URL for this call.
+func (cc *CallContext) GetAnswerURL() string {
+	return cc.answerURL
+}
+
+// GetEslConnection returns the ESL connection executor.
+// This is not part of MinimalCallContext but useful within callcontrol package.
+func (cc *CallContext) GetEslConnection() domain.EslConnectionExecutor {
+    return cc.eslConnection
+}
+
+// IsHangupInitiated checks if a hangup has been signaled for this call.
+func (cc *CallContext) IsHangupInitiated() bool {
+	cc.mutex.Lock()
+	defer cc.mutex.Unlock()
+	return cc.hangupInitiated
+}
+
+// SetHangupInitiated marks that a hangup signal has been received.
+func (cc *CallContext) SetHangupInitiated() {
+	cc.mutex.Lock()
+	defer cc.mutex.Unlock()
+	if !cc.hangupInitiated {
+		cc.hangupInitiated = true
+		cc.logger.Info("Hangup signal received, marking call context as hangup initiated.")
+	}
+}
+
+// Ensure CallContext implements domain.MinimalCallContext
+var _ domain.MinimalCallContext = &CallContext{}
