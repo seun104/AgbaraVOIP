@@ -5,20 +5,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io" // Required by NewMockMinimalCallContext for tests, but not directly here. Keep for consistency if tests are in same package.
 	"net"
-	"net/http" // Required for http.MethodGet/Post in handleOutboundConnection
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/fiorix/go-eventsocket/eventsocket"
+	"github.com/google/uuid"
+	"github.com/sirupsen/logrus"
+
 	"github.com/user/agbaravoip_golang/internal/callcontrol"
 	"github.com/user/agbaravoip_golang/internal/config"
 	"github.com/user/agbaravoip_golang/internal/domain"
 	"github.com/user/agbaravoip_golang/internal/interpreter"
-	"github.com/sirupsen/logrus"
-	"github.com/google/uuid" // For generating SIDs if needed by event handlers
+	"github.com/user/agbaravoip_golang/internal/utils" // For GenerateSID in event handlers
 )
 
 type FSOutboundServer struct {
@@ -28,14 +31,15 @@ type FSOutboundServer struct {
 	wg          sync.WaitGroup
 	shutdown    chan struct{}
 	xmlProcessor *callcontrol.XMLProcessor
-	callService CallServicerForESL // Use the interface
+	callService domain.CallServicerForESL // Use the interface from domain package
 }
 
-func NewFSOutboundServer(cfg config.Config, logger *logrus.Logger, cs CallServicerForESL, xp *callcontrol.XMLProcessor) (*FSOutboundServer, error) {
+// NewFSOutboundServer constructor
+func NewFSOutboundServer(cfg config.Config, logger *logrus.Logger, cs domain.CallServicerForESL, xp *callcontrol.XMLProcessor) (*FSOutboundServer, error) {
 	logEntry := logger.WithFields(logrus.Fields{"component": "esl_outbound_server"})
 	listenAddress := cfg.Freeswitch.FSOutboundListenAddress
 	if listenAddress == "" {
-		listenAddress = ":8084" // Default ESL Outbound listen address
+		listenAddress = ":8084"
 	}
 	listener, err := net.Listen("tcp", listenAddress)
 	if err != nil {
@@ -65,13 +69,12 @@ func (s *FSOutboundServer) acceptConnections() {
 		default:
 			netConn, err := s.listener.Accept()
 			if err != nil {
-				// Check if the error is due to the listener being closed
 				if opErr, ok := err.(*net.OpError); ok && opErr.Err.Error() == "use of closed network connection" {
 					s.logger.Info("Listener closed, stopping accept loop.")
 					return
 				}
 				s.logger.Errorf("Failed to accept connection: %v", err)
-				continue // Or handle more gracefully, maybe with a delay
+				continue
 			}
 			s.logger.Infof("Accepted new ESL connection from %s", netConn.RemoteAddr().String())
 			s.wg.Add(1)
@@ -99,7 +102,7 @@ func (s *FSOutboundServer) handleOutboundConnection(netConn net.Conn) {
 		return
 	}
 
-	eslExecutor := NewESLConnectionAdapter(rawEslConn)
+	eslExecutor := NewESLConnectionAdapter(rawEslConn, s.logger.WithField("adapter", "ESLConnectionAdapter")) // Pass logger to adapter
 	callCtx, err := NewCallContextFromEvent(evConnect, eslExecutor, s.logger.Logger)
 	if err != nil {
 		s.logger.Errorf("CallContext creation error for %s: %v", remoteAddr, err)
@@ -123,12 +126,16 @@ func (s *FSOutboundServer) handleOutboundConnection(netConn net.Conn) {
 		s.finalHangup(callCtx, "ESL_SETUP_ERR", eslExecutor)
 		return
 	}
+	if _, err := eslExecutor.SendMsg(map[string]string{"command": "event json CONFERENCE_MAINTENANCE ALL"}); err != nil {
+	callCtx.Log().Warnf("Failed to subscribe to CONFERENCE_MAINTENANCE events: %v. Conference callbacks might not work.", err)
+	}
 
-	channelState := callCtx.GetVariable("channel_state") // Assuming NewCallContextFromEvent populates this
+
+	channelState := callCtx.GetVariable("channel_state")
 	if channelState != "CS_EXECUTE" && channelState != "CS_EXCHANGE_MEDIA" && channelState != "CS_ROUTING" {
 		if _, errAns := eslExecutor.Answer(); errAns != nil {
 			errMsg := errAns.Error()
-			if !strings.Contains(strings.ToLower(errMsg), "already answered") && !strings.Contains(strings.ToLower(errMsg), "unknown command") { // "unknown command" if answered by dialplan before connect
+			if !strings.Contains(strings.ToLower(errMsg), "already answered") && !strings.Contains(strings.ToLower(errMsg), "unknown command") {
 				callCtx.Log().Errorf("Error answering call: %v", errAns)
 				s.finalHangup(callCtx, "ANSWER_ERR", eslExecutor)
 				return
@@ -189,25 +196,25 @@ func (s *FSOutboundServer) handleOutboundConnection(netConn net.Conn) {
 				}
 				currentElements = asyncElements
 				callCtx.Log().Infof("Received %d new XML elements from async event.", len(currentElements))
-				// Reset URL/Method/Params as these elements came from an async callback
 				currentURL = ""
-				currentMethod = http.MethodPost // Typically async callbacks POST results
+				currentMethod = http.MethodPost
 				currentParams = nil
 				continue
-			case <-time.After(60 * time.Second): // Configurable timeout
+			case <-callCtx.HangupChan(): // Listen to hangup signal from context
+				callCtx.Log().Info("Context hangup signal received in main loop. Terminating.")
+				// s.finalHangup(callCtx, "CONTEXT_HANGUP_SIGNAL", eslExecutor) // Already handled by IsHangupInitiated check
+				return
+			case <-time.After(60 * time.Second):
 				callCtx.Log().Info("Timeout waiting for more elements or async events. Hanging up.")
 				s.finalHangup(callCtx, "NO_MORE_ELEMENTS_TIMEOUT", eslExecutor)
-				return
-			case <-callCtx.HangupChan(): // Assuming CallContext has a channel that closes on hangup
-				callCtx.Log().Info("Context hangup signal received. Terminating XML processing loop.")
 				return
 			}
 		}
 
 		result := interpreter.ExecuteAgbaraXML(callCtx, currentElements, eslExecutor, s.callService)
-		currentElements = nil // Elements processed
+		currentElements = nil
 
-		// Check for async elements that might have arrived during sync execution
+		processExecutionResult := true
 		select {
 		case asyncElements, ok := <-callCtx.GetNextElementsChannel():
 			if !ok {
@@ -220,52 +227,61 @@ func (s *FSOutboundServer) handleOutboundConnection(netConn net.Conn) {
 			currentURL = ""
 			currentMethod = http.MethodPost
 			currentParams = nil
-			continue // Process these new elements first
+			processExecutionResult = false // Skip processing result of the just-executed sync elements
 		default:
-			// No async elements immediately, proceed with result of synchronous execution
+			// No async elements immediately available
 		}
 
-		if result.Action == domain.ActionRedirect {
-			if result.RedirectURL == "" {
-				callCtx.Log().Error("Redirect action with empty URL. Hanging up.")
-				s.finalHangup(callCtx, "REDIRECT_URL_EMPTY", eslExecutor)
-				return
-			}
-			callCtx.Log().Infof("Redirecting to %s %s", result.RedirectMethod, result.RedirectURL)
-			currentURL = result.RedirectURL
-			currentMethod = result.RedirectMethod // Use method from RedirectResult
-			currentParams = nil                   // Reset params for redirect
+		if processExecutionResult {
+			if result.Action == domain.ActionRedirect {
+				if result.RedirectURL == "" {
+					callCtx.Log().Error("Redirect action with empty URL. Hanging up.")
+					s.finalHangup(callCtx, "REDIRECT_URL_EMPTY", eslExecutor)
+					return
+				}
+				callCtx.Log().Infof("Redirecting to %s %s", result.RedirectMethod, result.RedirectURL)
+				currentURL = result.RedirectURL
+				currentMethod = result.RedirectMethod
+				currentParams = nil
 
-			elements, xmlErr := s.xmlProcessor.FetchAndParseXML(context.Background(), callCtx, currentURL, currentMethod, currentParams)
-			if xmlErr != nil {
-				callCtx.Log().Errorf("Redirect XML fetch/parse from %s failed: %v", currentURL, xmlErr)
-				s.finalHangup(callCtx, "XML_FETCH_PARSE_ERROR_REDIRECT", eslExecutor)
+				elements, xmlErr := s.xmlProcessor.FetchAndParseXML(context.Background(), callCtx, currentURL, currentMethod, currentParams)
+				if xmlErr != nil {
+					callCtx.Log().Errorf("Redirect XML fetch/parse from %s failed: %v", currentURL, xmlErr)
+					s.finalHangup(callCtx, "XML_FETCH_PARSE_ERROR_REDIRECT", eslExecutor)
+					return
+				}
+				currentElements = elements
+				callCtx.Log().Infof("Fetched & parsed redirect XML (%d elements).", len(currentElements))
+				continue
+			} else if result.Action == domain.ActionHangup || (result.Err != nil && result.Action != domain.ActionContinue) { // Hangup on error unless it's explicitly continue
+				hangupReason := "NORMAL_CLEARING"
+				if result.Err != nil {
+					hangupReason = "ERROR_IN_EXECUTION"
+					callCtx.Log().Errorf("Error during XML execution, hanging up. Error: %v", result.Err)
+				}
+				s.finalHangup(callCtx, hangupReason, eslExecutor)
 				return
 			}
-			currentElements = elements
-			callCtx.Log().Infof("Fetched & parsed redirect XML (%d elements).", len(currentElements))
-			continue
-		} else if result.Action == domain.ActionHangup || result.Err != nil {
-			hangupReason := "NORMAL_CLEARING"
-			if result.Err != nil {
-				hangupReason = "ERROR_IN_EXECUTION"
-				callCtx.Log().Errorf("Error during XML execution, hanging up. Error: %v", result.Err)
-			}
-			s.finalHangup(callCtx, hangupReason, eslExecutor)
-			return
 		}
-		// If ActionContinue and no more elements, loop will re-evaluate len(currentElements) and wait.
 	}
 	callCtx.Log().Info("Main XML processing loop in handleOutboundConnection has ended.")
 }
 
-// handleEslEvents runs in a separate goroutine to process incoming ESL events for the call.
+// Simplified local map for Dial status from Hangup Cause
+var localFreeswitchHangupCauseToDialStatus = map[string]string{
+	"NORMAL_CLEARING":      "completed",
+	"USER_BUSY":            "busy",
+	"NO_ANSWER":            "no-answer",
+	"CALL_REJECTED":        "failed",
+	"UNALLOCATED_NUMBER":   "failed",
+	"NORMAL_TEMPORARY_FAILURE": "failed",
+	"NO_ROUTE_DESTINATION": "failed",
+	"ORIGINATOR_CANCEL":    "canceled",
+}
+
+
 func (s *FSOutboundServer) handleEslEvents(callCtx *callcontrol.CallContext, rawEslConn *eventsocket.Connection, eslExecutor domain.EslConnectionExecutor) {
 	defer callCtx.Log().Info("Exiting ESL event handler goroutine.")
-	// Consider closing callCtx.nextElementsChannel here if this is the sole controller for it,
-	// but only if it's certain no other goroutine will try to write to it.
-	// defer close(callCtx.GetNextElementsChannel()) // This is unsafe if SendNextElements can be called elsewhere.
-
 	reader := bufio.NewReader(rawEslConn)
 	for {
 		if callCtx.IsHangupInitiated() {
@@ -285,13 +301,13 @@ func (s *FSOutboundServer) handleEslEvents(callCtx *callcontrol.CallContext, raw
 		}
 
 		eventName := event.Get("Event-Name")
-		eventUUID := event.Get("Unique-ID")
+		eventUUID := event.Get("Unique-ID") // FS UUID of the channel the event pertains to
 		callCtx.Log().Debugf("Received ESL Event: %s for UUID: %s", eventName, eventUUID)
 
 		switch eventName {
 		case "RECORD_STOP":
 			filePath := event.Get("variable_record_file_path")
-			if filePath == "" { filePath = event.Get("Record-File-Path") } // Fallback for older FS versions or different event formats
+			if filePath == "" { filePath = event.Get("Record-File-Path") }
 
 			pendingRecInfoInter, exists := callCtx.GetPendingRecording()
 			if exists && pendingRecInfoInter != nil {
@@ -301,39 +317,44 @@ func (s *FSOutboundServer) handleEslEvents(callCtx *callcontrol.CallContext, raw
 					callCtx.ClearPendingRecording()
 
 					durationStr := event.Get("variable_record_seconds")
-					if durationStr == "" { durationStr = event.Get("variable_duration_ms")} // Or variable_record_ms
-					duration, _ := time.ParseDuration(durationStr + "s") // Or ms
-					if durationStr == "" { // If seconds not there, try ms
-						durationStrMs := event.Get("variable_record_ms")
-						if durationStrMs != "" {
-							duration, _ = time.ParseDuration(durationStrMs + "ms")
-						}
+					if durationStr == "" { durationStr = event.Get("variable_record_ms") }
+
+					var durationSec uint32
+					if strings.HasSuffix(durationStr, "ms") {
+						msDuration, _ := time.ParseDuration(durationStr)
+						durationSec = uint32(msDuration.Seconds())
+					} else if durationStr != "" {
+						secDuration, _ := time.ParseDuration(durationStr + "s")
+						durationSec = uint32(secDuration.Seconds())
 					}
 
-					// SizeBytes might not be available directly. Passing 0 for now.
-					// recordingSid needs to be generated.
-					recordingSid := fmt.Sprintf("RE%s", strings.ReplaceAll(uuid.New().String(), "-", ""))
+					sizeBytes := int64(0) // Default, FS might not provide easily
+					if sizeStr := event.Get("variable_record_megabytes"); sizeStr != "" {
+						var megaBytes float64; fmt.Sscanf(sizeStr, "%f", &megaBytes)
+						sizeBytes = int64(megaBytes * 1024 * 1024)
+					} else if samplesStr := event.Get("variable_record_samples"); samplesStr != "" {
+						var samples int64; fmt.Sscanf(samplesStr, "%d", &samples)
+						sizeBytes = samples * 2 // Assuming 16-bit mono
+					}
 
+					recordingSid := utils.GenerateSID("RE")
 
 					if s.callService != nil {
-						err := s.callService.CreateRecording(callCtx, callCtx.GetCallSID(), recordingSid, filePath, uint32(duration.Seconds()), pendingRecInfo.OriginalElement.FileFormat, 0)
-						if err != nil {
-							callCtx.Log().Errorf("Error saving recording metadata for %s: %v", filePath, err)
-						} else {
-							callCtx.Log().Infof("Recording metadata saved for %s with SID %s", filePath, recordingSid)
-						}
+						err := s.callService.CreateRecording(callCtx, callCtx.GetCallSID(), recordingSid, filePath, durationSec, pendingRecInfo.OriginalElement.FileFormat, sizeBytes)
+						if err != nil { callCtx.Log().Errorf("Error saving recording metadata for %s: %v", filePath, err)
+						} else { callCtx.Log().Infof("Recording metadata saved for %s with SID %s", filePath, recordingSid) }
 					}
 
-					if pendingRecInfo.OriginalElement.ActionURL != "" {
+					if pendingRecInfo.OriginalElement.ActionURL != "" && s.xmlProcessor != nil {
 						params := url.Values{}
 						params.Set("RecordingSid", recordingSid)
-						params.Set("RecordingDuration", fmt.Sprintf("%d", int(duration.Seconds())))
-						params.Set("RecordingUrl", filePath) // This should be a public URL, not FS path
-						params.Set("CallSid", callCtx.GetUuid()) // Agbara Call SID of A-leg
+						params.Set("RecordingDuration", fmt.Sprintf("%d", durationSec))
+						params.Set("RecordingUrl", filePath) // Placeholder: This should be a public URL
+						params.Set("CallSid", callCtx.GetUuid())
 						params.Set("AccountSid", callCtx.GetAccountSid())
 
 						newElements, fetchErr := s.xmlProcessor.FetchAndParseXML(context.Background(), callCtx, pendingRecInfo.OriginalElement.GetActionURL(), pendingRecInfo.OriginalElement.GetMethod(), params)
-						if fetchErr == nil && newElements != nil && len(newElements) > 0 {
+						if fetchErr == nil && len(newElements) > 0 { // Check for newElements != nil too
 							if sendErr := callCtx.SendNextElements(newElements); sendErr != nil {
 								callCtx.Log().Errorf("Failed to send new elements from Record ActionURL to channel: %v", sendErr)
 							}
@@ -341,55 +362,40 @@ func (s *FSOutboundServer) handleEslEvents(callCtx *callcontrol.CallContext, raw
 							callCtx.Log().Errorf("Error fetching/parsing XML from Record ActionURL %s: %v", pendingRecInfo.OriginalElement.GetActionURL(), fetchErr)
 						}
 					}
-				} else {
-					callCtx.Log().Warnf("RECORD_STOP for file '%s' does not match pending recording path '%s'", filePath, pendingRecInfo.ExpectedFilePath)
-				}
-			} else {
-				callCtx.Log().Warnf("Received RECORD_STOP but no pending recording info found for file: %s", filePath)
-			}
+				} else { callCtx.Log().Warnf("RECORD_STOP for file '%s' does not match pending recording path '%s'", filePath, pendingRecInfo.ExpectedFilePath) }
+			} else { callCtx.Log().Warnf("Received RECORD_STOP but no pending recording info found for file: %s", filePath) }
 
 		case "CHANNEL_ANSWER":
-			bLegUUID := event.Get("Unique-ID")
-			if bLegUUID == callCtx.GetFreeswitchUUID() {
+			answeredUUID := event.Get("Unique-ID")
+			if answeredUUID == callCtx.GetFreeswitchUUID() {
 				callCtx.Log().Info("Received CHANNEL_ANSWER for A-leg.")
-				if s.callService != nil {
-					_ = s.callService.UpdateCallStatus(callCtx, string(domain.CallStatusInProgress), "")
-				}
-			} else { // B-leg answered
-				pendingDialInfoInter, exists := callCtx.GetPendingDial(bLegUUID)
+				if s.callService != nil { _ = s.callService.UpdateCallStatus(callCtx, string(domain.CallStatusInProgress), "") }
+			} else {
+				pendingDialInfoInter, exists := callCtx.GetPendingDial(answeredUUID)
 				if exists && pendingDialInfoInter != nil {
 					pendingDialInfo := pendingDialInfoInter.(*callcontrol.PendingDialInfo)
 					callCtx.Log().Infof("B-leg %s answered for Dial to %s (Parent AgbaraCallSID: %s)",
-						bLegUUID, pendingDialInfo.OriginalElement.CalleeIDToDial, pendingDialInfo.ParentAgbaraCallSID)
+						answeredUUID, pendingDialInfo.OriginalElement.CalleeIDToDial, pendingDialInfo.ParentAgbaraCallSID)
 
-					// Bridge A-leg to B-leg. Using Execute, assuming it's okay to block event handler briefly.
-					// For true async, eslExecutor.ExecuteAsync (if it existed and used bgapi) would be better.
-					_, err := eslExecutor.Execute("uuid_bridge", callCtx.GetFreeswitchUUID(), bLegUUID)
-					if err != nil {
-						callCtx.Log().Errorf("Error bridging A-leg %s to B-leg %s: %v", callCtx.GetFreeswitchUUID(), bLegUUID, err)
-					} else {
-						callCtx.Log().Infof("Successfully bridged A-leg %s to B-leg %s", callCtx.GetFreeswitchUUID(), bLegUUID)
+					_, bridgeErr := eslExecutor.Execute("uuid_bridge", callCtx.GetFreeswitchUUID(), answeredUUID)
+					if bridgeErr != nil { callCtx.Log().Errorf("Error bridging A-leg %s to B-leg %s: %v", callCtx.GetFreeswitchUUID(), answeredUUID, bridgeErr)
+					} else { callCtx.Log().Infof("Successfully sent uuid_bridge command for A-leg %s to B-leg %s", callCtx.GetFreeswitchUUID(), answeredUUID) }
+
+					if digitsToSend := callCtx.GetVariable("agbara_dial_send_digits_on_answer"); digitsToSend != "" { // Check on A-leg's context
+						callCtx.Log().Infof("Sending digits '%s' to B-leg %s", digitsToSend, answeredUUID)
+						_, dtmfErr := eslExecutor.Execute("uuid_send_dtmf", answeredUUID, digitsToSend)
+						if dtmfErr != nil { callCtx.Log().Errorf("Error sending DTMF '%s' to B-leg %s: %v", digitsToSend, answeredUUID, dtmfErr) }
 					}
 
-					if pendingDialInfo.OriginalElement.ActionURL != "" {
+					if pendingDialInfo.OriginalElement.ActionURL != "" && s.xmlProcessor != nil {
 						params := url.Values{}
-						params.Set("DialCallStatus", "answered")
-						params.Set("DialCallSid", bLegUUID)
-						params.Set("DialBlegUuid", bLegUUID) // Alias for clarity
-						params.Set("ParentCallSid", pendingDialInfo.ParentAgbaraCallSID)
-
+						params.Set("DialCallStatus", "answered"); params.Set("DialCallSid", answeredUUID); params.Set("DialBlegUuid", answeredUUID); params.Set("ParentCallSid", pendingDialInfo.ParentAgbaraCallSID)
 						newElements, fetchErr := s.xmlProcessor.FetchAndParseXML(context.Background(), callCtx, pendingDialInfo.OriginalElement.GetActionURL(), pendingDialInfo.OriginalElement.GetMethod(), params)
-						if fetchErr == nil && newElements != nil && len(newElements) > 0 {
-							if sendErr := callCtx.SendNextElements(newElements); sendErr != nil {
-								callCtx.Log().Errorf("Failed to send new elements from Dial Answer ActionURL to channel: %v", sendErr)
-							}
-						} else if fetchErr != nil {
-							callCtx.Log().Errorf("Error fetching/parsing XML from Dial Answer ActionURL %s: %v", pendingDialInfo.OriginalElement.GetActionURL(), fetchErr)
-						}
+						if fetchErr == nil && len(newElements) > 0 { // Check for newElements != nil
+							if sendErr := callCtx.SendNextElements(newElements); sendErr != nil { callCtx.Log().Errorf("Failed to send new elements from Dial Answer ActionURL: %v", sendErr) }
+						} else if fetchErr != nil { callCtx.Log().Errorf("Error fetching/parsing XML from Dial Answer ActionURL %s: %v", pendingDialInfo.OriginalElement.GetActionURL(), fetchErr) }
 					}
-				} else {
-					callCtx.Log().Debugf("Received CHANNEL_ANSWER for unknown B-leg UUID: %s", bLegUUID)
-				}
+				} else { callCtx.Log().Debugf("Received CHANNEL_ANSWER for non-pending B-leg UUID: %s", answeredUUID) }
 			}
 		case "CHANNEL_HANGUP":
 			hangedUpUUID := event.Get("Unique-ID")
@@ -403,54 +409,161 @@ func (s *FSOutboundServer) handleEslEvents(callCtx *callcontrol.CallContext, raw
 					pendingDialInfo := pendingDialInfoInter.(*callcontrol.PendingDialInfo)
 					callCtx.Log().Infof("B-leg %s hung up for Dial to %s (Parent AgbaraCallSID: %s). Cause: %s",
 						hangedUpUUID, pendingDialInfo.OriginalElement.CalleeIDToDial, pendingDialInfo.ParentAgbaraCallSID, hangupCause)
-
 					callCtx.RemovePendingDial(hangedUpUUID)
-
-					if pendingDialInfo.OriginalElement.ActionURL != "" {
-						params := url.Values{}
-						// Determine DialCallStatus from hangupCause
-						dialCallStatus := "completed" // Default
-						if hc, ok := domain.FreeswitchHangupCauseToAgbara[hangupCause]; ok {
-							if hc == domain.CallStatusBusy { dialCallStatus = "busy"}
-							if hc == domain.CallStatusNoAnswer { dialCallStatus = "no-answer"}
-							if hc == domain.CallStatusFailed { dialCallStatus = "failed"} // Or other failure causes
-						} else if hangupCause == "NORMAL_CLEARING" && event.Get("variable_bridge_hangup_cause") != "" {
-							// If it was bridged and the other leg hung up, this is completed.
-						} else if hangupCause != "NORMAL_CLEARING" {
-							dialCallStatus = "failed" // Generic failure for other causes
-						}
-
-						params.Set("DialCallStatus", dialCallStatus)
-						params.Set("DialCallSid", hangedUpUUID)
-						params.Set("DialBlegUuid", hangedUpUUID)
-						params.Set("ParentCallSid", pendingDialInfo.ParentAgbaraCallSID)
-						params.Set("DialHangupCause", hangupCause)
-
+					if pendingDialInfo.OriginalElement.ActionURL != "" && s.xmlProcessor != nil {
+						params := url.Values{}; dialCallStatus := "completed"
+						if mappedStatus, ok := localFreeswitchHangupCauseToDialStatus[hangupCause]; ok { dialCallStatus = mappedStatus
+						} else if hangupCause != "NORMAL_CLEARING" { dialCallStatus = "failed" }
+						params.Set("DialCallStatus", dialCallStatus); params.Set("DialCallSid", hangedUpUUID); params.Set("DialBlegUuid", hangedUpUUID); params.Set("ParentCallSid", pendingDialInfo.ParentAgbaraCallSID); params.Set("DialHangupCause", hangupCause)
 						newElements, fetchErr := s.xmlProcessor.FetchAndParseXML(context.Background(), callCtx, pendingDialInfo.OriginalElement.GetActionURL(), pendingDialInfo.OriginalElement.GetMethod(), params)
-						if fetchErr == nil && newElements != nil && len(newElements) > 0 {
-							if sendErr := callCtx.SendNextElements(newElements); sendErr != nil {
-								callCtx.Log().Errorf("Failed to send new elements from Dial Hangup ActionURL to channel: %v", sendErr)
-							}
-						} else if fetchErr != nil {
-							callCtx.Log().Errorf("Error fetching/parsing XML from Dial Hangup ActionURL %s: %v", pendingDialInfo.OriginalElement.GetActionURL(), fetchErr)
-						}
+						if fetchErr == nil && len(newElements) > 0 { // Check for newElements != nil
+							if sendErr := callCtx.SendNextElements(newElements); sendErr != nil { callCtx.Log().Errorf("Failed to send new elements from Dial Hangup ActionURL: %v", sendErr) }
+						} else if fetchErr != nil { callCtx.Log().Errorf("Error fetching/parsing XML from Dial Hangup ActionURL %s: %v", pendingDialInfo.OriginalElement.GetActionURL(), fetchErr) }
 					}
-				} else {
-					callCtx.Log().Debugf("Received CHANNEL_HANGUP for unrelated/unknown UUID: %s", hangedUpUUID)
-				}
+				} else { callCtx.Log().Debugf("Received CHANNEL_HANGUP for non-pending B-leg UUID: %s", hangedUpUUID) }
 			}
 		case "CHANNEL_HANGUP_COMPLETE":
 			if eventUUID == callCtx.GetFreeswitchUUID() {
 				callCtx.Log().Infof("Received CHANNEL_HANGUP_COMPLETE for A-leg %s. Terminating event handler.", callCtx.GetUuid())
-				callCtx.SetHangupInitiated()
-				return
+				callCtx.SetHangupInitiated(); return
 			}
 		case "DTMF":
-			callCtx.Log().Infof("Received DTMF: Digit='%s', Duration=%s", event.Get("DTMF-Digit"), event.Get("DTMF-Duration"))
-			// TODO: Implement DTMF handling for FinishOnKey (Record/Gather)
+			digit := event.Get("DTMF-Digit")
+			callCtx.Log().Infof("Received DTMF: Digit='%s', Duration=%s", digit, event.Get("DTMF-Duration"))
+			if recInfoInter, recExists := callCtx.GetPendingRecording(); recExists && recInfoInter != nil {
+				recInfo := recInfoInter.(*callcontrol.PendingRecordInfo)
+				if recInfo.OriginalElement.FinishOnKey != "" && strings.Contains(recInfo.OriginalElement.FinishOnKey, digit) {
+					callCtx.Log().Infof("FinishOnKey '%s' received during recording. Stopping recording %s.", digit, recInfo.ExpectedFilePath)
+					_, err := eslExecutor.Execute("uuid_record", callCtx.GetFreeswitchUUID(), "stop", recInfo.ExpectedFilePath)
+					if err != nil { callCtx.Log().Errorf("Error stopping recording %s on FinishOnKey: %v", recInfo.ExpectedFilePath, err) }
+				}
+			}
+		case "CONFERENCE_MAINTENANCE":
+			confName := event.Get("Conference-Name")
+			confUniqueID := event.Get("Conference-Unique-ID")
+			memberID := event.Get("Member-ID")
+			eventSubclass := event.Get("Event-Subclass")
+			participantCallFsUUID := event.Get("Caller-Channel-UUID")
+
+			currentConfSID, inConf := callCtx.GetCurrentConferenceSID()
+			currentConfName, _ := callCtx.GetCurrentConferenceName()
+
+			if !inConf || currentConfName != confName {
+				callCtx.Log().Debugf("Ignoring CONFERENCE_MAINTENANCE for conf '%s', current context conf is '%s'", confName, currentConfName)
+				continue
+			}
+
+			callCtx.Log().Infof("Conference Event: %s for %s (MemberID: %s, CallFSID: %s)", eventSubclass, confName, memberID, participantCallFsUUID)
+
+			var participantCallAgbaraSID string
+			if participantCallFsUUID == callCtx.GetFreeswitchUUID() {
+				participantCallAgbaraSID = callCtx.GetUuid()
+			} else {
+				participantCallAgbaraSID = event.Get("Caller-Caller-ID-Number")
+				if participantCallAgbaraSID == "" {  participantCallAgbaraSID = "unknown:" + participantCallFsUUID }
+			}
+
+			var dbConf *domain.Conference
+			var err error
+			if s.callService != nil { // Check if callService is available
+				dbConf, err = s.callService.GetConferenceBySID(context.Background(), currentConfSID)
+				if err != nil {
+					callCtx.Log().Errorf("ConfEvent: Failed to get conference %s from DB: %v", currentConfSID, err)
+					continue
+				}
+			} else {
+				callCtx.Log().Error("ConfEvent: callService is nil, cannot process conference DB operations.")
+				continue
+			}
+
+
+			params := url.Values{}
+			params.Set("ConferenceSid", dbConf.SID)
+			params.Set("ConferenceFriendlyName", dbConf.FriendlyName)
+			params.Set("Timestamp", time.Now().UTC().Format(time.RFC3339))
+			params.Set("EventMemberID", memberID) // Freeswitch Member-ID
+
+			switch eventSubclass {
+			case "conference::maintenance::add-member":
+				params.Set("Event", "participant-join")
+				var pSID string
+				if participantCallFsUUID == callCtx.GetFreeswitchUUID() {
+					pSID, _ = callCtx.GetCurrentConferenceParticipantSID()
+				} else {
+					part, pErr := s.callService.GetParticipantByCallSID(context.Background(), participantCallAgbaraSID)
+					if pErr == nil && part != nil { pSID = part.SID
+					} else { // Participant might not be in DB yet if joined via other means or this is the first event
+						// Attempt to add this newly discovered participant.
+						// This requires AccountSID. Assume it's the same as the current call's AccountSID for now.
+						newPSID := utils.GenerateSID("CP")
+						isMuted := event.Get("Speak") == "false" // Approximation
+						isModerator := event.Get("Control") == "moderator" // Approximation
+						_, addErr := s.callService.AddParticipant(context.Background(), dbConf.SID, participantCallAgbaraSID, newPSID, callCtx.GetAccountSid(), isMuted, isModerator)
+						if addErr == nil { pSID = newPSID
+						} else if errors.Is(addErr, domain.ErrConflict) { // Already added by another event/process
+							partRetry, pErrRetry := s.callService.GetParticipantByCallSID(context.Background(), participantCallAgbaraSID)
+							if pErrRetry == nil && partRetry != nil { pSID = partRetry.SID } else {pSID = "unknown_conflict"}
+						} else {
+							callCtx.Log().Errorf("Failed to add newly discovered participant %s to DB: %v", participantCallAgbaraSID, addErr)
+							pSID = "unknown_error"
+						}
+					}
+				}
+				params.Set("ParticipantSid", pSID)
+				params.Set("CallSid", participantCallAgbaraSID)
+
+			case "conference::maintenance::del-member":
+				params.Set("Event", "participant-leave")
+				part, pErr := s.callService.GetParticipantByCallSID(context.Background(), participantCallAgbaraSID)
+				if pErr == nil && part != nil {
+					_ = s.callService.RemoveParticipant(context.Background(), part.SID, time.Now().UTC())
+					params.Set("ParticipantSid", part.SID)
+				} else {
+					params.Set("ParticipantSid", "unknown")
+				}
+				params.Set("CallSid", participantCallAgbaraSID)
+				if participantCallFsUUID == callCtx.GetFreeswitchUUID() { callCtx.LeaveConference() }
+
+			case "conference::maintenance::mute-member", "conference::maintenance::unmute-member":
+				params.Set("Event", "participant-mute-update")
+				part, pErr := s.callService.GetParticipantByCallSID(context.Background(), participantCallAgbaraSID)
+				if pErr == nil && part != nil {
+					newMuteState := eventSubclass == "conference::maintenance::mute-member"
+					_ = s.callService.UpdateParticipantMuteStatus(context.Background(), part.SID, newMuteState)
+					params.Set("ParticipantSid", part.SID); params.Set("Muted", fmt.Sprintf("%t", newMuteState))
+				} else {params.Set("ParticipantSid", "unknown")}
+				params.Set("CallSid", participantCallAgbaraSID)
+
+			case "conference::maintenance::start-talking", "conference::maintenance::stop-talking":
+				params.Set("Event", "participant-talk-status")
+				part, pErr := s.callService.GetParticipantByCallSID(context.Background(), participantCallAgbaraSID)
+				if pErr == nil && part != nil { params.Set("ParticipantSid", part.SID)
+				} else { params.Set("ParticipantSid", "unknown") }
+				params.Set("CallSid", participantCallAgbaraSID)
+				params.Set("Talking", fmt.Sprintf("%t", eventSubclass == "conference::maintenance::start-talking"))
+
+			case "conference::maintenance::end":
+				params.Set("Event", "conference-end")
+				if s.callService != nil { _ = s.callService.EndConference(context.Background(), dbConf.SID, time.Now().UTC()) }
+				callCtx.LeaveConference()
+
+			default:
+				callCtx.Log().Debugf("Unhandled conference event subclass: %s", eventSubclass)
+				continue
+			}
+
+			cbURL, hasCB := callCtx.GetCurrentConferenceCallbackURL()
+			cbMethod, _ := callCtx.GetCurrentConferenceCallbackMethod()
+			if hasCB && cbURL != "" && s.xmlProcessor != nil { // Check s.xmlProcessor as well
+				// Call sendConferenceCallback which is fire-and-forget for simple notifications
+				// If ActionURL-like behavior (new XML) is desired for conference events,
+				// then FetchAndParseXML and SendNextElements would be used here.
+				// The prompt implies informational callbacks, so sendConferenceCallback is appropriate.
+				go sendConferenceCallback(cbURL, cbMethod, params, callCtx.Log())
+			}
+
 		default:
-			// Log other events if needed for debugging
-			// callCtx.Log().Tracef("ESL Event: %s, Content: %s", eventName, event.String())
+			// Other events can be logged or handled as needed
 		}
 	}
 }
@@ -461,18 +574,16 @@ func (s *FSOutboundServer) finalHangup(callCtx domain.MinimalCallContext, reason
 		s.logger.Error("finalHangup called with nil callCtx")
 		return
 	}
-	// Ensure eslExecutor is valid, especially if called from paths where it might not have been initialized
 	if eslExecutor == nil {
 		callCtx.Log().Error("finalHangup called with nil eslExecutor. Cannot send Hangup command.")
-		// If callService is available, at least try to update status.
 		if s.callService != nil {
 			_ = s.callService.UpdateCallStatus(callCtx, string(domain.CallStatusFailed), "ESL_EXECUTOR_NIL_ON_HANGUP")
 		}
-		callCtx.SetHangupInitiated() // Ensure other loops/goroutines know to stop
+		callCtx.SetHangupInitiated()
 		return
 	}
 
-	if callCtx.IsHangupInitiated() && reason != "CHANNEL_UNBRIDGE_HANGUP" { // Allow specific reasons for specific cases if needed
+	if callCtx.IsHangupInitiated() && reason != "CHANNEL_UNBRIDGE_HANGUP" {
 		callCtx.Log().Infof("Hangup already initiated or in progress for %s, new reason %s - not sending another hangup command.", callCtx.GetUuid(), reason)
 		return
 	}
@@ -485,15 +596,12 @@ func (s *FSOutboundServer) finalHangup(callCtx domain.MinimalCallContext, reason
 	}
 
 	if s.callService != nil {
-		// Determine final status based on reason more accurately if possible
 		finalStatus := domain.CallStatusCompleted
-		if reason != "NORMAL_CLEARING" && reason != "NORMAL_TEMPORARY_FAILURE" { // Add more failure reasons
-			// Many FS hangup causes might map to "failed" or specific Agbara statuses
-			if _, ok := domain.FreeswitchHangupCauseToAgbara[reason]; ok {
-				// Use mapped status if available, otherwise default to completed/failed
-			} else {
-				finalStatus = domain.CallStatusFailed // Default for unmapped error reasons
+		if reason != "NORMAL_CLEARING" && reason != "NORMAL_TEMPORARY_FAILURE" {
+			if _, ok := localFreeswitchHangupCauseToDialStatus[reason]; !ok { // Use local map
+				finalStatus = domain.CallStatusFailed
 			}
+			// Potentially map to other statuses based on reason if localFreeswitchHangupCauseToDialStatus was more comprehensive
 		}
 		err := s.callService.UpdateCallStatus(callCtx, string(finalStatus), reason)
 		if err != nil {
@@ -518,9 +626,16 @@ type ESLConnectionAdapter struct {
 	log  *logrus.Entry
 }
 
-func NewESLConnectionAdapter(eslConn *eventsocket.Connection) domain.EslConnectionExecutor {
-	adapterLogger := logrus.New().WithField("adapter", "ESLConnectionAdapter")
-	adapterLogger.Logger.SetOutput(io.Discard) // Quiet by default, or pass parent logger
+func NewESLConnectionAdapter(eslConn *eventsocket.Connection, logger *logrus.Entry) domain.EslConnectionExecutor { // Added logger
+	// Use passed logger or a default if nil
+	var adapterLogger *logrus.Entry
+	if logger != nil {
+		adapterLogger = logger.WithField("adapter", "ESLConnectionAdapter")
+	} else {
+		defaultLog := logrus.New()
+		defaultLog.SetOutput(io.Discard) // Default to discard if no logger passed
+		adapterLogger = logrus.NewEntry(defaultLog).WithField("adapter","ESLConnectionAdapter")
+	}
 	return &ESLConnectionAdapter{conn: eslConn, log: adapterLogger}
 }
 
@@ -531,26 +646,22 @@ func (a *ESLConnectionAdapter) Execute(command string, args ...string) (string, 
 	ev, err := a.conn.Execute(command, argStr, true)
 	if err != nil { return "", err }
 	if ev == nil { return "", errors.New("nil event received from ESL Execute") }
-	// Return Reply-Text or Body, depending on command. For apps, Reply-Text is usually the status.
 	return ev.Get("Reply-Text"), nil
 }
 
 func (a *ESLConnectionAdapter) ExecuteSofia(command string, args ...string) (string, error) {
 	if a.conn == nil { return "", errors.New("ESL connection is nil in adapter ExecuteSofia")}
-	// Example: sofia status profile internal
 	fullCmd := fmt.Sprintf("sofia %s %s", command, strings.Join(args, " "))
 	a.log.Debugf("Adapter ExecuteSofia (as API): %s", fullCmd)
 	ev, err := a.conn.Send(fmt.Sprintf("api %s", fullCmd))
 	if err != nil { return "", err}
 	if ev == nil { return "", errors.New("nil event received")}
-	return ev.Body, nil // Sofia commands often return body
+	return ev.Body, nil
 }
 
 func (a *ESLConnectionAdapter) SendMsg(msg map[string]string) (string, error) {
 	if a.conn == nil { return "", errors.New("ESL connection is nil in adapter SendMsg")}
 	if cmd, ok := msg["command"]; ok {
-		// This is for sending generic ESL commands like "myevents", "linger"
-		// For API commands, use ExecuteSofia or a dedicated API method if interface expands.
 		fullCmd := cmd
 		if cmdArgs, hasArgs := msg["args"]; hasArgs && cmdArgs != "" {
 			fullCmd = fmt.Sprintf("%s %s", cmd, cmdArgs)
@@ -577,7 +688,7 @@ func (a *ESLConnectionAdapter) Answer() (string, error) {
 	if err != nil { return "", err}
 	if ev == nil { return "", errors.New("nil event received from Answer")}
 	replyText := ev.Get("Reply-Text")
-	if strings.Contains(replyText, "-ERR Already Answered") || strings.Contains(replyText, "UNKNOWN COMMAND") { // FS might return UNKNOWN if dialplan answered.
+	if strings.Contains(replyText, "-ERR Already Answered") || strings.Contains(replyText, "UNKNOWN COMMAND") {
 		return replyText, errors.New(replyText)
 	}
 	if !strings.HasPrefix(replyText, "+OK") {
@@ -600,7 +711,6 @@ func (a *ESLConnectionAdapter) RecordSession(filePath string, maxDurationSec uin
 	cmdArgs := []string{filePath}
 	if maxDurationSec > 0 {
 		cmdArgs = append(cmdArgs, fmt.Sprintf("%d", maxDurationSec))
-		// Only add silence params if limit is also set, as per typical FS app behavior
 		if silenceThreshold > 0 {
 			cmdArgs = append(cmdArgs, fmt.Sprintf("%d", silenceThreshold))
 			if silenceHits > 0 {
@@ -616,34 +726,27 @@ func (a *ESLConnectionAdapter) Originate(dialString string, vars map[string]stri
 	if a.conn == nil { return "", errors.New("ESL connection is nil in adapter Originate")}
 	var varList []string
 	for k, v := range vars {
-		// Escape commas and curly braces for FS originate variable string
 		escapedValue := strings.ReplaceAll(v, ",", "\\,")
 		escapedValue = strings.ReplaceAll(escapedValue, "{", "\\{")
 		escapedValue = strings.ReplaceAll(escapedValue, "}", "\\}")
-		varList = append(varList, fmt.Sprintf("%s='%s'", k, escapedValue)) // Use single quotes for values
+		varList = append(varList, fmt.Sprintf("%s='%s'", k, escapedValue))
 	}
 	varsString := ""
 	if len(varList) > 0 { varsString = "{" + strings.Join(varList, ",") + "}" }
 
-	// Using 'bgapi originate' for non-blocking originate. The response will be Job-UUID.
-	// The actual new channel UUID will come in a subsequent CHANNEL_CREATE event.
-	// The caller (DialElement.Execute) needs to be aware of this or this adapter needs more logic (event listening).
-	// For now, returning Job-UUID as per prompt's note on this being a complex area.
-	originateCmd := fmt.Sprintf("bgapi originate %s%s", varsString, dialString) // Simplified: assumes dialString includes target app e.g. &socket()
+	originateCmd := fmt.Sprintf("bgapi originate %s%s", varsString, dialString)
 	a.log.Debugf("Adapter Originate (via bgapi): %s", originateCmd)
 
-	ev, err := a.conn.Send(originateCmd) // Send is for generic commands
+	ev, err := a.conn.Send(originateCmd)
 	if err != nil { return "", err }
 	if ev == nil { return "", errors.New("nil event from bgapi originate")}
 
-	// bgapi commands usually return Job-UUID in the body or a specific header
 	jobUUID := ev.Get("Job-UUID")
 	if jobUUID == "" {
-		// Check body if not in header
 		if strings.HasPrefix(ev.Body, "+OK Job-UUID: ") {
 			jobUUID = strings.TrimPrefix(ev.Body, "+OK Job-UUID: ")
-		} else if strings.HasPrefix(ev.Body, "+OK") { // Some simple OK might not have Job-UUID if command is very simple
-            return "OK_NO_JOB_UUID", nil // Or an empty string with nil error if that's acceptable
+		} else if strings.HasPrefix(ev.Body, "+OK") {
+            return "OK_NO_JOB_UUID", nil
         } else {
 			return "", fmt.Errorf("no Job-UUID from bgapi originate, response: %s", ev.Body)
 		}
@@ -655,12 +758,12 @@ func (a *ESLConnectionAdapter) Originate(dialString string, vars map[string]stri
 // NewCallContextFromEvent helper
 func NewCallContextFromEvent(ev *eventsocket.Event, eslExecutor domain.EslConnectionExecutor, baseLogger *logrus.Logger) (*callcontrol.CallContext, error) {
 	if ev == nil { return nil, errors.New("connect event is nil") }
-	fsUUID := ev.Get("Unique-ID") // This is the Freeswitch Channel UUID for the A-leg
+	fsUUID := ev.Get("Unique-ID")
 	if fsUUID == "" { return nil, errors.New("Unique-ID not found in connect event") }
 
 	agbaraCallSid := ev.Get("variable_agbara_call_sid")
 	if agbaraCallSid == "" {
-		agbaraCallSid = fsUUID // Default Agbara Call SID to FS UUID if not provided
+		agbaraCallSid = fsUUID
 		baseLogger.Warnf("variable_agbara_call_sid not found, defaulting to Freeswitch Unique-ID: %s", fsUUID)
 	}
 
@@ -673,7 +776,6 @@ func NewCallContextFromEvent(ev *eventsocket.Event, eslExecutor domain.EslConnec
 
 	appSid := ev.Get("variable_agbara_application_sid")
 	if appSid == "" { appSid = ev.Get("variable_application_sid")}
-	// appSid can be empty if not specified for the call.
 
 	answerURL := ev.Get("variable_agbara_answer_url")
 	if answerURL == "" {
@@ -694,9 +796,8 @@ func NewCallContextFromEvent(ev *eventsocket.Event, eslExecutor domain.EslConnec
 			}
 		}
 	}
-	// Ensure essential variables always present in the map for CallContext
-	vars["uuid"] = fsUUID // Freeswitch Channel UUID
-	vars["agbara_call_sid"] = agbaraCallSid // Our application's Call SID
+	vars["uuid"] = fsUUID
+	vars["agbara_call_sid"] = agbaraCallSid
 	vars["channel_state"] = ev.Get("Channel-State")
 	vars["channel_call_state"] = ev.Get("Channel-Call-State")
 	vars["caller_id_number"] = ev.Get("Caller-Caller-ID-Number")
@@ -705,24 +806,13 @@ func NewCallContextFromEvent(ev *eventsocket.Event, eslExecutor domain.EslConnec
 	vars["agbara_application_sid"] = appSid
 	vars["agbara_answer_url"] = answerURL
 
-
-	// Pass agbaraCallSid as the primary SID for CallContext, and fsUUID as a specific variable.
 	return callcontrol.NewCallContext(agbaraCallSid, fsUUID, accountSid, appSid, answerURL, vars, eslExecutor, baseLogger), nil
 }
 
-// MinimalCallContextTyped is no longer needed as handleEslEvents will use *callcontrol.CallContext
-// type MinimalCallContextTyped interface {
-// 	domain.MinimalCallContext
-// 	ESLConnection() domain.EslConnectionExecutor // Example of a method not on MinimalCallContext
-//  HangupChan() <-chan struct{} // Example, if CallContext had this
+// Helper to generate a unique recording SID (moved from domain to avoid import cycle if domain needs utils)
+// func GenerateRecordingSID() string {
+//     return fmt.Sprintf("RE%s", strings.ReplaceAll(uuid.New().String(), "-", ""))
 // }
-
-// Helper to generate a unique recording SID
-func GenerateRecordingSID() string {
-    // Example: RE + base36 of nanoseconds or a proper UUID
-    // Using a simpler version for now. Replace with robust SID generator.
-    return fmt.Sprintf("RE%d", time.Now().UnixNano())
-}
 
 // Helper for logging nullable strings, can be moved to a common utils package
 func LogNullString(ns *string) string {

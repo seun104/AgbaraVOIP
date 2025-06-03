@@ -14,9 +14,14 @@ var ( ErrCallNotFound_CS = errors.New("call not found"); ErrCallValidationFailed
 type CallService struct {
 	db *gorm.DB; eslClient *esl.FSInboundClient; appService IApplicationService; 
 	logger *logrus.Entry; cfgProvider FreeswitchOutboundConfigProvider
+	confService ConferenceService // Added conference service
 }
 func NewCallService(db *gorm.DB, eslClient *esl.FSInboundClient, appSvc IApplicationService, cfgProvider FreeswitchOutboundConfigProvider, logger *logrus.Logger) *CallService {
-	return &CallService{ db: db, eslClient: eslClient, appService: appSvc, logger: logger.WithField("service", "call"), cfgProvider: cfgProvider, }
+	// Initialize conferenceService, assuming NewConferenceService takes *gorm.DB and *logrus.Logger
+	// Note: NewConferenceService was defined to take *logrus.Logger, not *logrus.Entry.
+	// The CallService logger is *logrus.Entry. We'll pass the base logger.
+	conferenceSvc := NewConferenceService(db, logger)
+	return &CallService{ db: db, eslClient: eslClient, appService: appSvc, logger: logger.WithField("service", "call"), cfgProvider: cfgProvider, confService: conferenceSvc }
 }
 func (s *CallService) OriginateCall(accountSid string, fromNum string, toNum string, answerURL string, applicationSid *string, timeoutSeconds *int) (*domain.Call, error) {
 	if s.eslClient == nil { return nil, ErrESLClientNotAvailable_CS }
@@ -59,6 +64,61 @@ func (s *CallService) UpdateCallStatus(agbaraCallSid string, status domain.CallS
 	if err := s.db.Model(&call).Updates(updates).Error; err != nil { return nil, fmt.Errorf("DB error updating call: %w", err) }
 	s.db.Where("sid = ?", agbaraCallSid).First(&call); s.logger.Infof("Call %s status updated to %s", call.SID, call.Status); return &call, nil
 }
+
+// --- ConferenceService Delegation Methods ---
+
+func (s *CallService) GetConferenceBySID(ctx context.Context, sid string) (*domain.Conference, error) {
+	return s.confService.GetConferenceBySID(ctx, sid)
+}
+
+func (s *CallService) GetConferenceByName(ctx context.Context, accountSid, name string) (*domain.Conference, error) {
+	return s.confService.GetConferenceByName(ctx, accountSid, name)
+}
+
+func (s *CallService) CreateConference(ctx context.Context, accountSid, name, sid string) (*domain.Conference, error) {
+	return s.confService.CreateConference(ctx, accountSid, name, sid)
+}
+
+func (s *CallService) GetOrCreateConference(ctx context.Context, accountSid, name string) (*domain.Conference, error) {
+	return s.confService.GetOrCreateConference(ctx, accountSid, name)
+}
+
+func (s *CallService) UpdateConferenceStatus(ctx context.Context, sid string, status domain.ConferenceStatus) error {
+	return s.confService.UpdateConferenceStatus(ctx, sid, status)
+}
+
+func (s *CallService) EndConference(ctx context.Context, sid string, endTime time.Time) error {
+	return s.confService.EndConference(ctx, sid, endTime)
+}
+
+func (s *CallService) AddParticipant(ctx context.Context, confSid, callSid, pSid, accountSid string, isMuted, isModerator bool) (*domain.ConferenceParticipant, error) {
+	return s.confService.AddParticipant(ctx, confSid, callSid, pSid, accountSid, isMuted, isModerator)
+}
+
+func (s *CallService) GetParticipant(ctx context.Context, pSid string) (*domain.ConferenceParticipant, error) {
+	return s.confService.GetParticipant(ctx, pSid)
+}
+
+func (s *CallService) GetParticipantByCallSID(ctx context.Context, callSid string) (*domain.ConferenceParticipant, error) {
+	return s.confService.GetParticipantByCallSID(ctx, callSid)
+}
+
+func (s *CallService) UpdateParticipantMuteStatus(ctx context.Context, pSid string, isMuted bool) error {
+	return s.confService.UpdateParticipantMuteStatus(ctx, pSid, isMuted)
+}
+
+func (s *CallService) UpdateParticipantModeratorStatus(ctx context.Context, pSid string, isModerator bool) error {
+	return s.confService.UpdateParticipantModeratorStatus(ctx, pSid, isModerator)
+}
+
+func (s *CallService) RemoveParticipant(ctx context.Context, pSid string, leaveTime time.Time) error {
+	return s.confService.RemoveParticipant(ctx, pSid, leaveTime)
+}
+
+func (s *CallService) ListParticipants(ctx context.Context, confSid string) ([]*domain.ConferenceParticipant, error) {
+	return s.confService.ListParticipants(ctx, confSid)
+}
+
 
 // LogNullString is a helper for logging nullable strings.
 func LogNullString(ns *string) string {

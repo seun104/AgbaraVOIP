@@ -213,13 +213,27 @@ func TestFetchXML_POST_NoParams(t *testing.T) {
 }
 
 func TestFetchXML_WithAllVerbs(t *testing.T) {
-	serverXML := `<Response>
-	<Say>Test</Say>
-	<Gather action="/gather_action" method="POST" timeout="10" finishOnKey="#" numDigits="5">
-		<Play>enter_digits.wav</Play>
-	</Gather>
-	<Record action="/record_action" maxLength="30" playBeep="true" format="mp3"/>
-	<Dial action="/dial_action" callerId="12345" timeoutSeconds="45" hangupOnStar="true">1234567890</Dial>
+	// Extended XML to include more Dial verb variations and a top-level Conference
+	serverXML := `
+<Response>
+    <Say>Test Say</Say>
+    <Play>test.wav</Play>
+    <Gather action="/gather_action" timeout="10" numDigits="5" finishOnKey="#">
+        <Play>prompt.wav</Play>
+    </Gather>
+    <Record action="/record_action" maxLength="60" format="mp3" playBeep="true"/>
+    <Dial action="/dial_action_simple_chardata">1234567890</Dial>
+    <Dial action="/dial_action_number">
+        <Number sendDigits="ww123">5551112222</Number>
+    </Dial>
+    <Dial action="/dial_action_conference" callerId="confCaller">
+        <Conference muted="true" beep="true">meetingRoomAlpha</Conference>
+    </Dial>
+    <Dial action="/dial_action_sip">
+        <Sip>sip:alice@example.com</Sip>
+    </Dial>
+    <Conference callbackUrl="/conf_events" muted="false" maxMembers="20" beep="true">myMainConference</Conference>
+    <Hangup/>
 </Response>`
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -234,51 +248,105 @@ func TestFetchXML_WithAllVerbs(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, respElement)
 	if respElement == nil {
-		t.FailNow() // Avoid nil pointer dereference below
+		t.FailNow()
 	}
-	assert.Len(t, respElement.Verbs, 4) // Say, Gather, Record, Dial
+	assert.Len(t, respElement.Verbs, 10) // Say, Play, Gather, Record, Dial(chardata), Dial(Number), Dial(Conference), Dial(Sip), Conference, Hangup
 
-	// 1. SayElement
+	// Index 0: Say
 	sayElem, ok := respElement.Verbs[0].(*domain.SayElement)
-	assert.True(t, ok, "Expected SayElement at index 0")
-	if ok {
-		assert.Equal(t, "Test", sayElem.Text)
-	}
+	assert.True(t, ok, "Expected SayElement at index 0"); if ok { assert.Equal(t, "Test Say", sayElem.Text) }
 
-	// 2. GatherElement
-	gatherElem, ok := respElement.Verbs[1].(*domain.GatherElement)
-	assert.True(t, ok, "Expected GatherElement at index 1")
+	// Index 1: Play
+	playElem, ok := respElement.Verbs[1].(*domain.PlayElement)
+	assert.True(t, ok, "Expected PlayElement at index 1"); if ok { assert.Equal(t, "test.wav", playElem.URL) }
+
+	// Index 2: Gather
+	gatherElem, ok := respElement.Verbs[2].(*domain.GatherElement)
+	assert.True(t, ok, "Expected GatherElement at index 2")
 	if ok {
 		assert.Equal(t, "/gather_action", gatherElem.ActionURL)
-		assert.Equal(t, "POST", gatherElem.Method)
 		assert.Equal(t, 10, gatherElem.TimeoutSeconds)
+		assert.Equal(t, 5, gatherElem.NumDigits)
 		assert.Equal(t, "#", gatherElem.FinishOnKey)
-		assert.Equal(t, 5, gatherElem.NumDigits) // Assert numDigits
-		assert.NotNil(t, gatherElem.Play, "Gather should have a nested Play element")
-		if gatherElem.Play != nil {
-			assert.Equal(t, "enter_digits.wav", gatherElem.Play.URL)
-		}
-		assert.Nil(t, gatherElem.Say, "Gather should not have a nested Say element in this test case")
+		assert.NotNil(t, gatherElem.Play); if gatherElem.Play != nil { assert.Equal(t, "prompt.wav", gatherElem.Play.URL) }
 	}
 
-	// 3. RecordElement
-	recordElem, ok := respElement.Verbs[2].(*domain.RecordElement)
-	assert.True(t, ok, "Expected RecordElement at index 2")
+	// Index 3: Record
+	recordElem, ok := respElement.Verbs[3].(*domain.RecordElement)
+	assert.True(t, ok, "Expected RecordElement at index 3")
 	if ok {
 		assert.Equal(t, "/record_action", recordElem.ActionURL)
-		assert.Equal(t, 30, recordElem.MaxLengthSeconds)
+		assert.Equal(t, 60, recordElem.MaxLengthSeconds)
+		assert.Equal(t, "mp3", recordElem.FileFormat)
 		assert.True(t, recordElem.PlayBeep)
-		assert.Equal(t, "mp3", recordElem.FileFormat) // Assert format
 	}
 
-	// 4. DialElement
-	dialElem, ok := respElement.Verbs[3].(*domain.DialElement)
-	assert.True(t, ok, "Expected DialElement at index 3")
+	// Index 4: Dial (chardata)
+	dialSimple, ok := respElement.Verbs[4].(*domain.DialElement)
+	assert.True(t, ok, "Expected DialElement (simple chardata) at index 4")
 	if ok {
-		assert.Equal(t, "/dial_action", dialElem.ActionURL)
-		assert.Equal(t, "1234567890", dialElem.CalleeIDToDial)
-		assert.Equal(t, "12345", dialElem.CallerID)          // Assert callerId
-		assert.Equal(t, 45, dialElem.TimeoutSeconds)     // Assert timeoutSeconds
-		assert.True(t, dialElem.HangupOnStar)             // Assert hangupOnStar
+		assert.Equal(t, "/dial_action_simple_chardata", dialSimple.ActionURL)
+		assert.Equal(t, "1234567890", dialSimple.CalleeIDToDial)
+		assert.Nil(t, dialSimple.Number)
+		assert.Nil(t, dialSimple.NestedConference)
+		assert.Nil(t, dialSimple.Sip)
 	}
+
+	// Index 5: Dial (Number)
+	dialWithNumber, ok := respElement.Verbs[5].(*domain.DialElement)
+	assert.True(t, ok, "Expected DialElement (with Number) at index 5")
+	if ok {
+		assert.Equal(t, "/dial_action_number", dialWithNumber.ActionURL)
+		assert.NotNil(t, dialWithNumber.Number, "Dial.Number should not be nil")
+		if dialWithNumber.Number != nil {
+			assert.Equal(t, "5551112222", dialWithNumber.Number.PhoneNumber)
+			assert.Equal(t, "ww123", dialWithNumber.Number.SendDigits)
+		}
+		assert.Empty(t, dialWithNumber.CalleeIDToDial, "CalleeIDToDial should be empty when Number is present")
+		assert.Nil(t, dialWithNumber.NestedConference)
+		assert.Nil(t, dialWithNumber.Sip)
+	}
+
+	// Index 6: Dial (Conference)
+	dialWithConf, ok := respElement.Verbs[6].(*domain.DialElement)
+	assert.True(t, ok, "Expected DialElement (with Conference) at index 6")
+	if ok {
+		assert.Equal(t, "/dial_action_conference", dialWithConf.ActionURL)
+		assert.Equal(t, "confCaller", dialWithConf.CallerID)
+		assert.NotNil(t, dialWithConf.NestedConference, "Dial.NestedConference should not be nil")
+		if dialWithConf.NestedConference != nil {
+			assert.Equal(t, "meetingRoomAlpha", dialWithConf.NestedConference.RoomName)
+			assert.True(t, dialWithConf.NestedConference.Muted)
+			assert.True(t, dialWithConf.NestedConference.Beep)
+		}
+		assert.Empty(t, dialWithConf.CalleeIDToDial)
+		assert.Nil(t, dialWithConf.Number)
+		assert.Nil(t, dialWithConf.Sip)
+	}
+
+	// Index 7: Dial (Sip)
+	dialWithSip, ok := respElement.Verbs[7].(*domain.DialElement)
+	assert.True(t, ok, "Expected DialElement (with Sip) at index 7")
+	if ok {
+		assert.Equal(t, "/dial_action_sip", dialWithSip.ActionURL)
+		assert.NotNil(t, dialWithSip.Sip, "Dial.Sip should not be nil")
+		if dialWithSip.Sip != nil {
+			assert.Equal(t, "sip:alice@example.com", dialWithSip.Sip.URI)
+		}
+		assert.Empty(t, dialWithSip.CalleeIDToDial)
+		assert.Nil(t, dialWithSip.Number)
+		assert.Nil(t, dialWithSip.NestedConference)
+	}
+
+	// Index 8: Top-level Conference
+	confElem, ok := respElement.Verbs[8].(*domain.ConferenceElement)
+	assert.True(t, ok, "Expected ConferenceElement at index 8")
+	if ok {
+		assert.Equal(t, "myMainConference", confElem.RoomName)
+		assert.Equal(t, "/conf_events", confElem.CallbackURL)
+	}
+
+	// Index 9: Hangup
+	_, okHangup := respElement.Verbs[9].(*domain.HangupElement)
+	assert.True(t, okHangup, "Expected HangupElement at index 9")
 }

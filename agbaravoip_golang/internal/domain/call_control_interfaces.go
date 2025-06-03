@@ -25,6 +25,17 @@ type MinimalCallContext interface {
 
 	SendNextElements(elements []CallControlElement) error
 	GetNextElementsChannel() <-chan []CallControlElement
+
+	// Conference related context methods
+	EnterConference(confSID, confName, callbackURL, callbackMethod string)
+	LeaveConference()
+	IsInConference() bool
+	GetCurrentConferenceSID() (string, bool)
+	GetCurrentConferenceName() (string, bool)
+	GetCurrentConferenceCallbackURL() (string, bool)
+	GetCurrentConferenceCallbackMethod() (string, bool)
+	SetCurrentConferenceParticipantSID(participantSID string)
+	GetCurrentConferenceParticipantSID() (string, bool)
 }
 
 // EslConnectionExecutor defines the interface for executing commands on an ESL connection.
@@ -54,16 +65,37 @@ type EslConnectionExecutor interface {
 // CallServicerForESL defines methods the ESL/CallControl layer needs from CallService.
 // This helps break import cycles.
 type CallServicerForESL interface {
+	// Call related methods
 	UpdateCallStatus(ctx MinimalCallContext, status string, hangupCause string) error
-	UpdateCallRecording(ctx MinimalCallContext, recordingPath string, durationSec int, format string) error
-	// CreateRecording saves metadata about a completed recording.
-	// callSid is the SID of the call associated with the recording (can be nil if it's a conference recording).
-	// recordingSid is the new unique SID for this recording.
-	// filePath is the path/URL to the recording file.
-	// duration is the length of the recording in seconds.
-	// format is the file format (e.g., "wav", "mp3").
-	// sizeBytes is the size of the recording file in bytes.
+	// Note: UpdateCallRecording was specified in a previous prompt for CallServicerForESL,
+	// but CreateRecording (below) is what was implemented in CallService and seems more appropriate
+	// for the ESL layer to call after a recording is finished.
+	// If UpdateCallRecording is also needed for other purposes (e.g. updating path after move), it can be kept.
+	// For now, focusing on CreateRecording as per the latest service implementation.
+	// UpdateCallRecording(ctx MinimalCallContext, recordingPath string, durationSec int, format string) error
+
+	// Recording related methods
 	CreateRecording(ctx MinimalCallContext, callSid *string, recordingSid, filePath string, duration uint32, format string, sizeBytes int64) error
+
+	// Conference related methods (embedding ConferenceService interface)
+	// This requires importing the services package.
+	// "github.com/user/agbaravoip_golang/internal/services" - this would create import cycle domain -> services -> domain
+	// So, we must list methods explicitly or use a different approach for interface segregation.
+	// For now, listing explicitly to avoid import cycle with services package.
+	GetConferenceBySID(ctx context.Context, sid string) (*Conference, error)
+	GetConferenceByName(ctx context.Context, accountSid, name string) (*Conference, error)
+	CreateConference(ctx context.Context, accountSid, name, sid string) (*Conference, error)
+	GetOrCreateConference(ctx context.Context, accountSid, name string) (*Conference, error)
+	UpdateConferenceStatus(ctx context.Context, sid string, status ConferenceStatus) error
+	EndConference(ctx context.Context, sid string, endTime time.Time) error
+	AddParticipant(ctx context.Context, confSid, callSid, pSid, accountSid string, isMuted, isModerator bool) (*ConferenceParticipant, error)
+	GetParticipant(ctx context.Context, pSid string) (*ConferenceParticipant, error)
+	GetParticipantByCallSID(ctx context.Context, callSid string) (*ConferenceParticipant, error)
+	UpdateParticipantMuteStatus(ctx context.Context, pSid string, isMuted bool) error
+	UpdateParticipantModeratorStatus(ctx context.Context, pSid string, isModerator bool) error
+	RemoveParticipant(ctx context.Context, pSid string, leaveTime time.Time) error
+	ListParticipants(ctx context.Context, confSid string) ([]*ConferenceParticipant, error)
+
 	// Add CreateCall if Dial verb needs it through this interface in the future
 	// Example: CreateSubsequentCall(ctx MinimalCallContext, params CreateCallParams) (newCallUUID string, err error)
 }

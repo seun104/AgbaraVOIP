@@ -41,19 +41,40 @@ type CallContext struct {
 	pendingDialsMutex   sync.RWMutex                // Mutex for pendingDials map
 
 	nextElementsChannel chan []domain.CallControlElement // Buffered channel for async XML
+
+	// Conference related fields
+	currentConferenceSID            *string
+	currentConferenceName           *string
+	currentConferenceCallbackURL    *string
+	currentConferenceCallbackMethod *string
+	currentConferenceParticipantSID *string // SID of this call leg as a participant
+	confMutex                       sync.RWMutex // For conference fields
+	hangupChan                      chan struct{} // For signaling hangup internally
 }
 
 // NewCallContext creates a new CallContext.
 // The eslConnection parameter should be an object that satisfies domain.EslConnectionExecutor.
+// The 'uuid' parameter is the Agbara Call SID. The Freeswitch specific UUID is expected to be in vars["uuid"].
 func NewCallContext(uuid, accountSid, appSid, answerURL string, vars map[string]string, eslConn domain.EslConnectionExecutor, baseLogger *logrus.Logger) *CallContext {
 	logger := baseLogger.WithFields(logrus.Fields{
-		"call_uuid": uuid,
-		"account_sid": accountSid,
+		"agbara_call_sid": uuid, // Use agbara_call_sid for clarity in logs
+		"account_sid":    accountSid,
+		// "freeswitch_uuid": vars["uuid"], // Optionally log FS UUID if always present and useful
 	})
 	logger.Info("Creating new call context")
 
+	// Ensure vars is not nil, as it's used by GetVariable and potentially GetFreeswitchUUID
+	if vars == nil {
+		vars = make(map[string]string)
+	}
+	// If agbara_call_sid is not already in vars, add it.
+	if _, exists := vars["agbara_call_sid"]; !exists {
+		vars["agbara_call_sid"] = uuid
+	}
+
+
 	return &CallContext{
-		uuid:              uuid,
+		uuid:              uuid, // This 'uuid' field stores the Agbara Call SID
 		accountSid:        accountSid,
 		applicationSid:    appSid,
 		answerURL:         answerURL,
@@ -62,9 +83,9 @@ func NewCallContext(uuid, accountSid, appSid, answerURL string, vars map[string]
 		eslConnection:     eslConn,
 		hangupInitiated:   false,
 		pendingDials:      make(map[string]*PendingDialInfo),
-		// pendingDialsMutex is value type, initialized implicitly
-		// pendingRecordingMutex is value type, initialized implicitly
-		nextElementsChannel: make(chan []domain.CallControlElement, 1), // Buffered channel of size 1
+		nextElementsChannel: make(chan []domain.CallControlElement, 1),
+		hangupChan:        make(chan struct{}),
+		// Mutexes (pendingDialsMutex, pendingRecordingMutex, confMutex) are zero-value ready.
 	}
 }
 
@@ -109,11 +130,26 @@ func (cc *CallContext) IsHangupInitiated() bool {
 // SetHangupInitiated marks that a hangup signal has been received.
 func (cc *CallContext) SetHangupInitiated() {
 	cc.mutex.Lock()
-	defer cc.mutex.Unlock()
-	if !cc.hangupInitiated {
+	// Unlock before potential panic on close if already closed, though current logic aims for single closer.
+	// defer cc.mutex.Unlock()
+	alreadyInitiated := cc.hangupInitiated
+	if !alreadyInitiated {
 		cc.hangupInitiated = true
-		cc.logger.Info("Hangup signal received, marking call context as hangup initiated.")
+		// Close channel before logging to ensure signal is sent first.
+		// This also prevents recursive lock if logger somehow calls SetHangupInitiated.
+		// Ensure hangupChan is not nil (it's initialized in NewCallContext).
+		if cc.hangupChan != nil {
+			// Check if channel is already closed to prevent panic
+			// This is a bit tricky. A select with a default is one way for non-blocking check,
+			// but here we are in a critical section. Simpler to rely on single-closer principle for now.
+			// If this method can be called concurrently by routines that might race to close,
+			// a sync.Once around close(cc.hangupChan) would be safer.
+			// For now, assume SetHangupInitiated's critical section (mutex) serializes calls.
+			close(cc.hangupChan)
+		}
+		cc.logger.Info("Hangup signal received, marking call context as hangup initiated and closing hangupChan.")
 	}
+	cc.mutex.Unlock() // Unlock after modifications
 }
 
 // Ensure CallContext implements domain.MinimalCallContext
@@ -209,4 +245,118 @@ func (cc *CallContext) SendNextElements(elements []domain.CallControlElement) er
 
 func (cc *CallContext) GetNextElementsChannel() <-chan []domain.CallControlElement {
 	return cc.nextElementsChannel
+}
+
+// HangupChan returns a channel that is closed when hangup is initiated.
+func (cc *CallContext) HangupChan() <-chan struct{} {
+	return cc.hangupChan
+}
+
+// GetFreeswitchUUID retrieves the Freeswitch Channel UUID from variables.
+// It's a helper method for CallContext users, not part of MinimalCallContext by default.
+func (cc *CallContext) GetFreeswitchUUID() string {
+	if fsUUID, ok := cc.variables["uuid"]; ok { // FS sets 'uuid' var with its channel UUID
+		return fsUUID
+	}
+	cc.logger.Warn("Freeswitch UUID (vars[\"uuid\"]) not found in CallContext variables.")
+	return "" // Or handle error appropriately
+}
+
+// GetCallSID returns the Agbara Call SID (which is cc.uuid) as a pointer.
+// Useful for DB interactions where a *string might be needed for nullable fields,
+// though for this specific SID, it should always be present.
+func (cc *CallContext) GetCallSID() *string {
+	if cc.uuid == "" {
+		return nil // Should not happen for a valid CallContext
+	}
+	sid := cc.uuid
+	return &sid
+}
+
+
+// --- Conference Context Methods ---
+
+func (cc *CallContext) EnterConference(confSID, confName, callbackURL, callbackMethod string) {
+	cc.confMutex.Lock()
+	defer cc.confMutex.Unlock()
+	cc.currentConferenceSID = &confSID
+	cc.currentConferenceName = &confName
+	if callbackURL != "" {
+		cc.currentConferenceCallbackURL = &callbackURL
+		cc.currentConferenceCallbackMethod = &callbackMethod
+	} else {
+		cc.currentConferenceCallbackURL = nil
+		cc.currentConferenceCallbackMethod = nil
+	}
+}
+
+func (cc *CallContext) LeaveConference() {
+	cc.confMutex.Lock()
+	defer cc.confMutex.Unlock()
+	cc.currentConferenceSID = nil
+	cc.currentConferenceName = nil
+	cc.currentConferenceCallbackURL = nil
+	cc.currentConferenceCallbackMethod = nil
+	cc.currentConferenceParticipantSID = nil
+}
+
+func (cc *CallContext) IsInConference() bool {
+	cc.confMutex.RLock()
+	defer cc.confMutex.RUnlock()
+	return cc.currentConferenceSID != nil && *cc.currentConferenceSID != ""
+}
+
+func (cc *CallContext) GetCurrentConferenceSID() (string, bool) {
+	cc.confMutex.RLock()
+	defer cc.confMutex.RUnlock()
+	if cc.currentConferenceSID != nil {
+		return *cc.currentConferenceSID, true
+	}
+	return "", false
+}
+
+func (cc *CallContext) GetCurrentConferenceName() (string, bool) {
+	cc.confMutex.RLock()
+	defer cc.confMutex.RUnlock()
+	if cc.currentConferenceName != nil {
+		return *cc.currentConferenceName, true
+	}
+	return "", false
+}
+
+func (cc *CallContext) GetCurrentConferenceCallbackURL() (string, bool) {
+	cc.confMutex.RLock()
+	defer cc.confMutex.RUnlock()
+	if cc.currentConferenceCallbackURL != nil {
+		return *cc.currentConferenceCallbackURL, true
+	}
+	return "", false
+}
+
+func (cc *CallContext) GetCurrentConferenceCallbackMethod() (string, bool) {
+	cc.confMutex.RLock()
+	defer cc.confMutex.RUnlock()
+	if cc.currentConferenceCallbackMethod != nil {
+		return *cc.currentConferenceCallbackMethod, true
+	}
+	return "", false
+}
+
+func (cc *CallContext) SetCurrentConferenceParticipantSID(participantSID string) {
+	cc.confMutex.Lock()
+	defer cc.confMutex.Unlock()
+	if participantSID != "" {
+		cc.currentConferenceParticipantSID = &participantSID
+	} else {
+		cc.currentConferenceParticipantSID = nil
+	}
+}
+
+func (cc *CallContext) GetCurrentConferenceParticipantSID() (string, bool) {
+	cc.confMutex.RLock()
+	defer cc.confMutex.RUnlock()
+	if cc.currentConferenceParticipantSID != nil {
+		return *cc.currentConferenceParticipantSID, true
+	}
+	return "", false
 }

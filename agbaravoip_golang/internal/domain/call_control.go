@@ -7,8 +7,10 @@ import (
 	"path/filepath" // For generating file paths
 	"strings"
 	"time" // For unique filenames
+	"context" // For callSvc methods
 
 	"github.com/user/agbaravoip_golang/internal/callcontrol" // For Pending structs
+	"github.com/user/agbaravoip_golang/internal/utils" // For GenerateSID
 	// "github.com/fiorix/go-eventsocket/eventsocket" // No longer needed here, EslConnectionExecutor is in this package (interfaces file)
 	"github.com/sirupsen/logrus"
 )
@@ -27,6 +29,7 @@ const (
 	ActionPlay     CallControlAction = "Play"   // Added for PlayElement
 	ActionPause    CallControlAction = "Pause"  // Added for PauseElement
 	ActionDial     CallControlAction = "Dial"   // Added for DialElement
+	ActionConference CallControlAction = "Conference" // Added for ConferenceElement
 )
 
 // CallControlResult defines the outcome of executing a call control element.
@@ -195,6 +198,31 @@ func (r *RecordElement) Execute(ctx MinimalCallContext, eslConn EslConnectionExe
 	return CallControlResult{Action: ActionContinue}
 }
 
+// NumberElement is a nested target for Dial
+type NumberElement struct {
+	XMLName     xml.Name `xml:"Number"`
+	PhoneNumber string   `xml:",chardata"`
+	SendDigits  string   `xml:"sendDigits,attr,omitempty"` // Digits to send after the call is answered
+	// URL         string   `xml:"url,attr,omitempty"`      // Advanced: URL for B-leg control XML
+	// Method      string   `xml:"method,attr,omitempty"`   // Method for URL
+}
+
+// NestedConferenceElement is a nested target for Dial (distinct from top-level ConferenceElement)
+type NestedConferenceElement struct {
+	XMLName                xml.Name `xml:"Conference"` // XML tag is still "Conference"
+	RoomName               string   `xml:",chardata"`
+	Muted                  bool     `xml:"muted,attr,omitempty"`
+	Beep                   bool     `xml:"beep,attr,omitempty"` // Beep for this participant
+	StartConferenceOnEnter bool     `xml:"startConferenceOnEnter,attr,omitempty"`
+	EndConferenceOnExit    bool     `xml:"endConferenceOnExit,attr,omitempty"`
+}
+
+// SipElement is a nested target for Dial
+type SipElement struct {
+	XMLName xml.Name `xml:"Sip"`
+	URI     string   `xml:",chardata"` // Full SIP URI e.g., user@domain.com or 1234@1.2.3.4
+}
+
 // DialElement Structure
 type DialElement struct {
 	XMLName        xml.Name `xml:"Dial"`
@@ -204,6 +232,11 @@ type DialElement struct {
 	CalleeIDToDial string   `xml:",chardata"`                  // The number, SIP URI, or user to dial
 	TimeoutSeconds int      `xml:"timeout,attr,omitempty"`     // Ringing timeout for the new leg in seconds
 	HangupOnStar   bool     `xml:"hangupOnStar,attr,omitempty"`// If true, receiving '*' on this leg hangs up the other leg(s)
+
+	// Nested target elements
+	Number           *NumberElement           `xml:"Number,omitempty"`
+	NestedConference *NestedConferenceElement `xml:"Conference,omitempty"`
+	Sip              *SipElement              `xml:"Sip,omitempty"`
 }
 
 func (d *DialElement) GetType() CallControlAction { return ActionDial }
@@ -225,20 +258,61 @@ func (d *DialElement) Execute(ctx MinimalCallContext, eslConn EslConnectionExecu
 		return CallControlResult{Action: ActionError, Err: errors.New("logger nil in DialElement.Execute")}
 	}
 
-	if strings.TrimSpace(d.CalleeIDToDial) == "" {
-		logger.Error("Dial: CalleeIDToDial is empty.")
-		return CallControlResult{Action: ActionError, Err: errors.New("Dial CalleeIDToDial is empty")}
-	}
-
-	logger.Infof("Executing Dial: Callee='%s', CallerID='%s', Timeout=%ds, ActionURL='%s'",
-		d.CalleeIDToDial, d.CallerID, d.TimeoutSeconds, d.ActionURL)
-
+	var targetDescription string
 	var dialString string
-	if strings.Contains(d.CalleeIDToDial, "@") {
-		dialString = fmt.Sprintf("sofia/internal/%s", d.CalleeIDToDial)
+	var sendDigitsAfterAnswer string
+
+	confProfile := "default"
+
+	if d.Number != nil {
+		if strings.TrimSpace(d.Number.PhoneNumber) == "" {
+			logger.Error("Dial: Nested Number element is empty.")
+			return CallControlResult{Action: ActionError, Err: errors.New("Dial <Number> is empty")}
+		}
+		targetDescription = fmt.Sprintf("Number: %s", d.Number.PhoneNumber)
+		if strings.Contains(d.Number.PhoneNumber, "@") {
+			dialString = fmt.Sprintf("sofia/internal/%s", d.Number.PhoneNumber)
+		} else {
+			dialString = fmt.Sprintf("sofia/gateway/default/%s", d.Number.PhoneNumber)
+		}
+		sendDigitsAfterAnswer = d.Number.SendDigits
+	} else if d.NestedConference != nil {
+		if strings.TrimSpace(d.NestedConference.RoomName) == "" {
+			logger.Error("Dial: Nested Conference element RoomName is empty.")
+			return CallControlResult{Action: ActionError, Err: errors.New("Dial <Conference> RoomName is empty")}
+		}
+		targetDescription = fmt.Sprintf("Conference: %s", d.NestedConference.RoomName)
+		var confOptions []string
+		if d.NestedConference.Muted { confOptions = append(confOptions, "mute") }
+
+		flagsPart := ""
+		if len(confOptions) > 0 {
+			flagsPart = "+" + strings.Join(confOptions, "+")
+		}
+		dialString = fmt.Sprintf("conference:%s@%s%s", d.NestedConference.RoomName, confProfile, flagsPart)
+	} else if d.Sip != nil {
+		if strings.TrimSpace(d.Sip.URI) == "" {
+			logger.Error("Dial: Nested Sip element URI is empty.")
+			return CallControlResult{Action: ActionError, Err: errors.New("Dial <Sip> URI is empty")}
+		}
+		targetDescription = fmt.Sprintf("Sip: %s", d.Sip.URI)
+		dialString = d.Sip.URI
+	} else if strings.TrimSpace(d.CalleeIDToDial) != "" {
+		targetDescription = fmt.Sprintf("Direct CalleeID: %s", d.CalleeIDToDial)
+		if strings.Contains(d.CalleeIDToDial, "@") {
+			dialString = fmt.Sprintf("sofia/internal/%s", d.CalleeIDToDial)
+		} else {
+			// Keep existing simple user/ or gateway logic for direct CalleeIDToDial
+			// For consistency with the prompt's Number logic, let's use gateway for non-@
+			 dialString = fmt.Sprintf("sofia/gateway/default/%s", d.CalleeIDToDial)
+		}
 	} else {
-		dialString = fmt.Sprintf("user/%s", d.CalleeIDToDial)
+		logger.Error("Dial: No valid target specified (Number, Conference, Sip, or chardata).")
+		return CallControlResult{Action: ActionError, Err: errors.New("Dial target is empty")}
 	}
+
+	logger.Infof("Executing Dial: Target='%s', DialString='%s', CallerID='%s', Timeout=%ds, ActionURL='%s'",
+		targetDescription, dialString, d.CallerID, d.TimeoutSeconds, d.ActionURL)
 
 	originateVars := make(map[string]string)
 
@@ -260,6 +334,10 @@ func (d *DialElement) Execute(ctx MinimalCallContext, eslConn EslConnectionExecu
 	originateVars["agbara_dial_action_url"] = d.GetActionURL()
 	originateVars["agbara_dial_action_method"] = d.GetMethod()
 	originateVars["agbara_dial_hangup_on_star"] = fmt.Sprintf("%t", d.HangupOnStar)
+
+	if sendDigitsAfterAnswer != "" {
+		originateVars["agbara_dial_send_digits_on_answer"] = sendDigitsAfterAnswer
+	}
 	// originateVars["accountcode"] = ctx.GetAccountSid() // Example for billing
 
 	logger.Infof("Dial: Calling eslConn.Originate: DialString='%s', VarsMapLength=%d", dialString, len(originateVars))
@@ -281,6 +359,125 @@ func (d *DialElement) Execute(ctx MinimalCallContext, eslConn EslConnectionExecu
 	ctx.AddPendingDial(newChannelUUID, pendingDialInfo) // Pass the concrete type
 	logger.Info("Dial: Pending dial operation registered in call context for new UUID: %s", newChannelUUID)
 
+	return CallControlResult{Action: ActionContinue}
+}
+
+// ConferenceElement Structure
+type ConferenceElement struct {
+	XMLName                xml.Name `xml:"Conference"`
+	RoomName               string   `xml:",chardata"` // Name of the conference room
+	Muted                  bool     `xml:"muted,attr,omitempty"`
+	Beep                   bool     `xml:"beep,attr,omitempty"` // Play beep on enter/exit
+	StartConferenceOnEnter bool     `xml:"startConferenceOnEnter,attr,omitempty"`
+	EndConferenceOnExit    bool     `xml:"endConferenceOnExit,attr,omitempty"`
+	MaxParticipants        int      `xml:"maxMembers,attr,omitempty"` // XML attr is maxMembers
+	WaitURL                string   `xml:"waitUrl,attr,omitempty"`    // URL for music on hold
+	WaitMethod             string   `xml:"waitMethod,attr,omitempty"` // Method for WaitURL (GET or POST)
+	HangupOnStar           bool     `xml:"hangupOnStar,attr,omitempty"`
+	CallbackURL            string   `xml:"callbackUrl,attr,omitempty"` // URL to notify of conference events
+	CallbackMethod         string   `xml:"callbackMethod,attr,omitempty"` // Method for CallbackURL
+	EnterSound             string   `xml:"enterSound,attr,omitempty"` // Sound to play when participant enters
+	ExitSound              string   `xml:"exitSound,attr,omitempty"`  // Sound to play when participant exits
+	TimeLimit              int      `xml:"timeLimit,attr,omitempty"`  // Max duration of conference in seconds
+}
+
+func (c *ConferenceElement) GetType() CallControlAction { return ActionConference }
+
+func (c *ConferenceElement) GetActionURL() string {
+	// This refers to the CallbackURL for async notifications
+	return c.CallbackURL
+}
+
+func (c *ConferenceElement) GetMethod() string {
+	// This refers to the method for CallbackURL.
+	if c.CallbackMethod == "" {
+		return "POST" // Default to POST for callbacks
+	}
+	return c.CallbackMethod
+}
+
+func (c *ConferenceElement) Execute(ctx MinimalCallContext, eslConn EslConnectionExecutor, callSvc CallServicerForESL) CallControlResult {
+	logger := ctx.Log()
+	if logger == nil {
+		return CallControlResult{Action: ActionError, Err: errors.New("logger nil in ConferenceElement.Execute")}
+	}
+
+	if strings.TrimSpace(c.RoomName) == "" {
+		logger.Error("ConferenceElement: RoomName is empty.")
+		return CallControlResult{Action: ActionError, Err: errors.New("Conference RoomName is empty")}
+	}
+
+	// Get or Create Conference and Participant records BEFORE joining
+	dbConference, err := callSvc.GetOrCreateConference(context.Background(), ctx.GetAccountSid(), c.RoomName)
+	if err != nil {
+		logger.Errorf("ConferenceElement: Failed to get/create conference '%s' in DB: %v", c.RoomName, err)
+		return CallControlResult{Action: ActionError, Err: fmt.Errorf("DB GetOrCreateConference failed for %s: %w", c.RoomName, err)}
+	}
+
+	participantSID := utils.GenerateSID("CP")
+	isMuted := c.Muted
+	isModerator := false // TODO: Determine moderator status if applicable from element attributes or context
+
+	_, err = callSvc.AddParticipant(context.Background(), dbConference.SID, ctx.GetUuid(), participantSID, ctx.GetAccountSid(), isMuted, isModerator)
+	if err != nil && !errors.Is(err, ErrConflict) { // Allow rejoining if AddParticipant handles it or ErrConflict is fine (ErrConflict needs to be domain.ErrConflict)
+		logger.Errorf("ConferenceElement: Failed to add participant CallSID %s to conference %s in DB: %v", ctx.GetUuid(), dbConference.SID, err)
+		// Not returning error here, will attempt to join FS conference anyway. Could be made fatal.
+	} else if errors.Is(err, ErrConflict) { // domain.ErrConflict
+		logger.Warnf("ConferenceElement: Participant CallSID %s already in conference %s or conflict adding.", ctx.GetUuid(), dbConference.SID)
+	} else {
+		logger.Infof("ConferenceElement: Participant CallSID %s (PSID %s) added to DB for conference %s", ctx.GetUuid(), participantSID, dbConference.SID)
+		ctx.SetCurrentConferenceParticipantSID(participantSID)
+	}
+
+	ctx.EnterConference(dbConference.SID, dbConference.FriendlyName, c.CallbackURL, c.GetMethod())
+	logger.Infof("ConferenceElement: Context marked as in conference %s (SID %s)", c.RoomName, dbConference.SID)
+
+	// Defer clearing conference markers from context
+	defer func() {
+		ctx.LeaveConference()
+		logger.Infof("ConferenceElement: Context conference markers cleared for %s", c.RoomName)
+	}()
+
+
+	confProfile := "default" // Placeholder: Make this configurable
+	var options []string
+	if c.Muted { // This sets the initial mute state for this participant when joining
+		options = append(options, "mute")
+	}
+	// Other flags like 'moderator' could be set here if they are per-participant flags for the conference app
+	// if isModerator { options = append(options, "moderator") }
+
+
+	// startConferenceOnEnter and endConferenceOnExit are more complex.
+	// 'endconf' flag on a moderator can end conference.
+	// 'start_on_enter' might be a custom profile behavior or variable.
+	// For now, these boolean attributes from XML are not directly translated to simple conference flags.
+
+	var flagsPart string
+	if len(options) > 0 {
+		flagsPart = "+" + strings.Join(options, "+")
+	}
+	conferenceDialString := fmt.Sprintf("%s@%s%s", c.RoomName, confProfile, flagsPart)
+
+	logger.Infof("ConferenceElement: Attempting to join conference '%s' with dial string '%s'", c.RoomName, conferenceDialString)
+
+	_, eslErr := eslConn.Execute("conference", conferenceDialString) // This is a blocking call
+
+	if eslErr != nil {
+		// Error could be due to hangup, kick, or conference ending.
+		logger.Warnf("ConferenceElement: Exited conference '%s' with potential error: %v", c.RoomName, eslErr)
+		// If the error indicates a failure to join (e.g., profile not found, conference full), it's an ActionError.
+		// If it's a hangup during/after joining, ActionHangup might be more appropriate.
+		// The ESL 'conference' app usually blocks until the leg leaves the conference.
+		// An error often means the call hung up or was kicked.
+		if strings.Contains(eslErr.Error(), "NORMAL_TEMPORARY_FAILURE") || strings.Contains(eslErr.Error(), "NO_SUCH_CONFERENCE") {
+			return CallControlResult{Action: ActionError, Err: fmt.Errorf("failed to join conference '%s': %w", c.RoomName, eslErr)}
+		}
+		// For other errors (like hangup), consider it as call ending its conference participation.
+		return CallControlResult{Action: ActionHangup, Err: eslErr}
+	}
+
+	logger.Infof("ConferenceElement: Successfully left conference '%s'.", c.RoomName)
 	return CallControlResult{Action: ActionContinue}
 }
 

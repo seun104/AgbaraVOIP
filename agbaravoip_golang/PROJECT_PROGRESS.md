@@ -8,7 +8,7 @@ This document tracks the progress of re-implementing the AgbaraVOIP system in Go
 - [X] Phase 2: Application Management & Basic Call Origination
 - [X] Phase 3: Core AgbaraXML-like Processing (Outbound ESL)
 - [X] Phase 4: Advanced Call Control Features (Gather, Record, Dial-Primitives)
-- [ ] Phase 5: Conference Calls & Complex Dial
+- [X] Phase 5: Conference Calls & Complex Dial
 - [ ] Phase 6: SMS Functionality
 - [ ] Phase 7: Advanced Features, Security Hardening, Scalability
 - [ ] Phase 8: Documentation & Production Readiness
@@ -119,3 +119,36 @@ This document tracks the progress of re-implementing the AgbaraVOIP system in Go
     * Added unit tests for `CallService.CreateRecording` in `services_test/call_service_test.go` using `sqlmock`.
     * Updated XML parsing tests in `utils/httpclient/httpclient_test.go` to assert attributes of new elements.
     * Established foundation for integration tests in `esl/outbound_integration_test.go` for ESL event handling, highlighting areas for future SUT refactoring for better testability.
+
+---
+## Phase 5: Conference Calls & Complex Dial
+- **Goal:** Implement multi-party conference calls and enhance the Dial verb for more complex targets.
+- **Status:** Completed
+
+### Tasks:
+- [X] **Task P5.0: Define `ConferenceElement` and related Domain Objects**
+    - Defined `ConferenceElement` in `call_control.go` (with attributes, methods, stubbed Execute).
+    - Created `domain/conference.go` with `Conference`, `ConferenceParticipant` structs, and `ConferenceStatus` ENUM.
+- [X] **Task P5.1: Implement `Execute` Method for `ConferenceElement`**
+    - Implemented logic to send Freeswitch `conference` command.
+    - Handles blocking nature and translates attributes to basic conference parameters.
+    - Interacts with `ConferenceService` to create DB records before joining.
+- [X] **Task P5.2: Enhance `DialElement` for Nested Targets**
+    - Added `Number *NumberElement`, `NestedConference *NestedConferenceElement`, `Sip *SipElement` fields to `DialElement`.
+    - Defined these nested element structs.
+    - Updated `DialElement.Execute` to prioritize and process these nested targets.
+- [X] **Task P5.3: Database Migrations for Conference Tables**
+    - Created DB migrations for `conferences` and `conference_participants` tables.
+    - Updated `recordings` table with a foreign key to `conferences.sid`.
+- [X] **Task P5.4: Implement Conference Service & Interface**
+    - Created `ConferenceService` interface and implementation (`conference_service.go`) for DB operations related to conferences and participants (using GORM).
+    - Updated `CallServicerForESL` and `CallService` to include/delegate conference methods.
+- [X] **Task P5.5: ESL Event Handling for Conferences**
+    - Enhanced `CallContext` for managing active conference state (current conference SID, callback details).
+    - Updated `handleEslEvents` in `outbound.go` to process `CONFERENCE_MAINTENANCE` events (add/del member, mute/unmute, talk, end), update DB via `ConferenceService`, and trigger informational `CallbackURL` HTTP notifications.
+- [X] **Task P5.6: Verify/Update XML Parsing for New Nested Dial Targets**
+    - Augmented tests in `httpclient_test.go` to confirm correct parsing of `<Dial>` with nested `<Number>`, `<Conference>`, and `<Sip>` elements by the existing XML unmarshalling logic.
+- [X] **Task P5.7: Unit and Integration Tests for Phase 5 Features**
+    - Added unit tests for `ConferenceElement.Execute`, updated `DialElement.Execute` tests.
+    - Added comprehensive unit tests for `ConferenceService` methods.
+    - Enhanced integration tests in `outbound_integration_test.go` for conference event handling scenarios.
