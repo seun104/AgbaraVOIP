@@ -1,0 +1,126 @@
+name: AgbaraVOIP Go CI/CD
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Go
+      uses: actions/setup-go@v3
+      with:
+        go-version-file: 'agbaravoip_golang/go.mod' # Assumes go.mod specifies Go version
+
+    - name: Verify Go Version
+      run: go version
+      working-directory: ./agbaravoip_golang
+
+    - name: Install golangci-lint
+      run: |
+        curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.50.1 # Or latest version
+        golangci-lint --version
+      working-directory: ./agbaravoip_golang
+
+    - name: Go Mod Tidy & Download
+      run: |
+        go mod tidy
+        go mod download
+      working-directory: ./agbaravoip_golang
+
+    - name: Lint Code
+      run: golangci-lint run ./...
+      working-directory: ./agbaravoip_golang
+
+    - name: Run Unit Tests
+      run: go test -v -coverprofile=coverage.out ./...
+      working-directory: ./agbaravoip_golang
+
+    # Optional: Upload coverage to Codecov or similar
+    # - name: Upload coverage to Codecov
+    #   uses: codecov/codecov-action@v3
+    #   with:
+    #     token: ${{ secrets.CODECOV_TOKEN }} # Store in GitHub secrets
+    #     files: ./agbaravoip_golang/coverage.out
+    #     working-directory: ./agbaravoip_golang
+    #     flags: unittests
+    #     name: codecov-umbrella
+    #     fail_ci_if_error: true
+
+    - name: Build Go Application
+      run: go build -v -o ../agbaravoip_server ./cmd/agbaravoip_server/main.go
+      working-directory: ./agbaravoip_golang # Output to agbaravoip_golang/../agbaravoip_server
+
+    - name: Login to Docker Hub (or other registry)
+      if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') # Only on push to main/develop
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+        # For other registries like GHCR, ECR, GCR, refer to their specific login actions/setup
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+
+    - name: Build and Push Docker Image
+      if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+      uses: docker/build-push-action@v4
+      with:
+        context: ./agbaravoip_golang # Context is the agbaravoip_golang directory where Dockerfile is
+        file: ./agbaravoip_golang/Dockerfile
+        push: true
+        tags: |
+          ${{ secrets.DOCKERHUB_USERNAME }}/agbaravoip:${{ github.sha }}
+          ${{ secrets.DOCKERHUB_USERNAME }}/agbaravoip:${{ github.ref_name == 'main' && 'latest' || github.ref_name }} # Tag 'latest' for main, branch name for develop
+        # For other registries, adapt the tags format
+
+  # Placeholder for CD job - this is highly dependent on your infrastructure
+  # deploy-staging:
+  #   needs: test-and-build
+  #   runs-on: ubuntu-latest
+  #   if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+  #   environment: staging
+  #   steps:
+  #     - name: Checkout code (for scripts or docker-compose files)
+  #       uses: actions/checkout@v3
+  #     - name: Configure AWS Credentials (if deploying to AWS)
+  #       uses: aws-actions/configure-aws-credentials@v1
+  #       with:
+  #         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_STAGING }}
+  #         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_STAGING }}
+  #         aws-region: your-aws-region
+  #     - name: Download Docker Image
+  #       run: docker pull ${{ secrets.DOCKERHUB_USERNAME }}/agbaravoip:${{ github.sha }}
+  #     - name: Run DB Migrations (example using docker-compose exec)
+  #       run: |
+  #         # Assuming migrate tool is in your app image or another service
+  #         # docker-compose -f path/to/docker-compose-staging.yml exec -T app_service migrate -path /migrations -database "$DATABASE_URL_STAGING" up
+  #         echo "DB Migrations would run here"
+  #     - name: Deploy to Staging (example using docker-compose)
+  #       run: |
+  #         # Update .env or docker-compose.yml with new image tag
+  #         # docker-compose -f path/to/docker-compose-staging.yml up -d --remove-orphans
+  #         echo "Deployment to staging for image ${{ secrets.DOCKERHUB_USERNAME }}/agbaravoip:${{ github.sha }} would happen here"
+  #     - name: Smoke Tests
+  #       run: |
+  #         # ./run-smoke-tests.sh staging_url
+  #         echo "Smoke tests would run here"
+
+  # deploy-production:
+  #   needs: test-and-build # Potentially also needs deploy-staging if that's a prerequisite
+  #   runs-on: ubuntu-latest
+  #   if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+  #   environment: production # Requires manual approval if environment protection rules are set
+  #   steps:
+  #     - name: Deploy to Production
+  #       run: echo "Deployment to production for image ${{ secrets.DOCKERHUB_USERNAME }}/agbaravoip:latest would happen here after manual approval (if configured)"

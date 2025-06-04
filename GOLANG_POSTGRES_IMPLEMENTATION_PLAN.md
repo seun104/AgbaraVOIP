@@ -1,155 +1,214 @@
-# AgbaraVOIP Reimplementation: GoLang & PostgreSQL - Technical Implementation Plan
+# AgbaraVOIP Reimplementation: GoLang & PostgreSQL - Technical Documentation
 
 ## 1. Introduction
-    - Purpose of this document: To outline the technical plan for re-implementing the AgbaraVOIP platform using GoLang for backend services and PostgreSQL for the database.
-    - Brief overview of the goal: Port the existing C#/MongoDB AgbaraVOIP system to a GoLang/PostgreSQL stack to leverage GoLang's performance for concurrent operations, its suitability for network services, and PostgreSQL's robustness as a relational database.
-    - Summary of key benefits: Improved performance and scalability, potentially lower resource consumption, modernized technology stack, strong typing and concurrency features of GoLang, and the reliability and data integrity features of PostgreSQL.
+    - Purpose of this document: To describe the technical implementation of the AgbaraVOIP platform using GoLang for backend services and PostgreSQL for the database.
+    - Brief overview of the system: A GoLang/PostgreSQL-based VOIP platform offering API-controlled voice and SMS functionalities, designed for performance and scalability.
+    - Summary of key benefits: Improved performance and scalability, lower resource consumption, modernized technology stack, strong typing and concurrency features of GoLang, and the reliability and data integrity features of PostgreSQL.
 
-## 2. Analysis of Existing System & Core Functionality to Reimplement
-    - This plan is based on the analysis of the `TECHNICAL_DOCUMENTATION.md` for the original AgbaraVOIP system.
-    - **Core Entities to Reimplement:**
-        - Account: User accounts, sub-accounts, authentication tokens, status, type.
+## 2. Analysis of Existing System & Core Functionality Implemented (Up to Phase 6)
+    - This document reflects the state of the system up to the completion of Phase 6 of the original implementation plan.
+    - **Core Entities Implemented:**
+        - Account: User accounts, sub-accounts, authentication tokens (hashed), status, type.
         - Application: User-defined voice/SMS applications defining URLs for call/message handling logic.
-        - Call: Call Detail Records (CDRs), status, direction, duration, price, linkage to Accounts.
+        - Call: Call Detail Records (CDRs), status, direction, duration, price, linkage to Accounts and Applications.
+        - Recording: Metadata for call and conference recordings (URL, duration, path).
         - Conference: Details of conference rooms, status, and participants.
-        - FSServer (Freeswitch Server): Configuration for Freeswitch instances.
-        - Gateway: Configuration for outbound VOIP gateways.
-        - Recording: Metadata for call and conference recordings (URL, duration).
-        - SMSMessage: Details of SMS messages (sender, recipient, body, status, price).
         - ConferenceParticipant: Information about participants in a conference.
-    - **Key API Functionalities to Reimplement:**
+        - SMSMessage: Details of SMS messages (sender, recipient, body, status, price, direction).
+        - FreeswitchServer: Configuration for Freeswitch instances (schema only, no API management yet).
+        - Gateway: Configuration for outbound VOIP gateways (schema only, no API management yet).
+    - **Key API Functionalities Implemented:**
         - Account Management: CRUD operations for accounts and sub-accounts.
         - Application Management: CRUD operations for voice/SMS applications.
-        - Call Control: Initiation of outbound calls, retrieval of call history/details, in-call modifications (hangup, play audio, speak text, send DTMF, record).
-        - Conference Management: Creation of conferences, management of participants (add, remove, mute, kick), conference recording.
-        - Recording Management: Listing and retrieval of recordings.
-        - SMS Handling: Sending and receiving SMS messages.
-    - **AgbaraXML Core Logic to Address:**
-        - The new system must provide equivalent functionality for core AgbaraXML verbs such as `<Say>`, `<Play>`, `<Gather>`, `<Record>`, `<Dial>` (including nested `<Number>` and `<Conference>`), `<Hangup>`, `<Pause>`, `<Redirect>`, `<Reject>`, and `<PreAnswer>`. The method of achieving this (direct XML parsing or Go-native logic) is discussed in the architecture section.
+        - Call Management: Initiation of outbound calls, retrieval of call history/details.
+        - SMS Handling: API endpoint for inbound SMS messages, and processing of `<Sms>` AgbaraXML verb for outbound.
+    - **AgbaraXML Core Logic:**
+        - The system processes AgbaraXML fetched from application-defined URLs to control call flow.
+        - Implemented AgbaraXML verbs include: `<Say>`, `<Play>`, `<Hangup>`, `<Pause>`, `<Redirect>`, `<Record>`, `<Dial>` (including nested `<Number>` and `<Conference>`), `<Conference>`, and `<Sms>`. The `<Gather>` verb is defined in the domain but its execution logic is not yet fully implemented.
     - **Freeswitch Interaction Points:**
-        - **Inbound ESL (Go App to Freeswitch):** For originating calls and sending commands to active calls via API.
-        - **Outbound ESL (Freeswitch to Go App):** For Freeswitch to delegate call control to the Go application (e.g., for incoming calls or calls requiring dynamic XML-like logic).
-        - **Event Handling:** Robust handling of Freeswitch events (e.g., `CHANNEL_EXECUTE_COMPLETE`, `CHANNEL_HANGUP_COMPLETE`, `DTMF`) is critical.
+        - **Inbound ESL (Go App to Freeswitch):** Used for originating calls (via `bgapi originate`) and potentially other administrative commands.
+        - **Outbound ESL (Freeswitch to Go App):** Freeswitch connects to the Go application (listening on a dedicated port) to delegate call control for incoming calls or calls initiated via `originate` that point to the Go app's socket listener.
+        - **Event Handling:** Handles Freeswitch events such as `CHANNEL_ANSWER`, `CHANNEL_HANGUP`, `RECORD_STOP`, `DTMF`, and `CONFERENCE_MAINTENANCE` to manage call state and trigger application logic.
 
 ## 3. GoLang Service Architecture
-    - **Proposed Structure:** A modular monolithic application for the initial reimplementation. This application will be internally structured into distinct GoLang packages. This structure can be evolved into microservices if future scalability requirements dictate.
+    - **Structure:** A modular monolithic application internally structured into distinct GoLang packages.
     - **Key GoLang Packages/Modules:**
         - **`api` Package:**
             - Handles all incoming HTTP REST API requests.
-            - Recommended Framework: **Gin Gonic (Gin)** (`github.com/gin-gonic/gin`) for routing, request/response marshalling, and middleware.
-            - Interacts with the `services` package for business logic and the `callcontrol` package for real-time call operations.
+            - Uses the **Gin Gonic (Gin)** framework (`github.com/gin-gonic/gin`) for routing, request/response marshalling, and middleware.
+            - Interacts with the `services` package for business logic.
         - **`callcontrol` Package:**
-            - Manages real-time call flow logic and all Freeswitch ESL interactions.
-            - ESL Library: **`github.com/fiorix/go-eventsocket` (fsesl)** is a strong candidate. If it proves unsuitable, a custom ESL interaction module might be needed, built upon `net` and Go's concurrency primitives.
-            - Outbound ESL Server: Listens for TCP connections from Freeswitch (via the `socket` dialplan application). Each connection is handled in a separate goroutine.
-            - Inbound ESL Client: Provides an interface for the `api` package to send commands to Freeswitch (e.g., originate calls). May include connection pooling.
-            - AgbaraXML Equivalence:
-                - **Initial Approach (Option A):** Retain the ability to process AgbaraXML-like documents. The Go service will fetch XML from URLs (defined in `Application` entities) and parse it using `encoding/xml`. Go functions corresponding to each AgbaraXML verb will execute ESL commands. This ensures closer functional parity with the original system.
-                - **Future Evolution (Option B):** For performance-critical or complex flows, logic could be implemented directly in Go, triggered by application identifiers rather than dynamic XML fetching.
-        - **`services` Package (or `domain`):**
-            - Encapsulates business logic and data persistence operations, abstracting database interactions.
-            - Database Interaction: Use the standard `database/sql` package with the PostgreSQL driver `github.com/lib/pq`.
-            - ORM/Query Builder: **GORM** (`gorm.io/gorm`) is recommended for simplifying database operations, struct-to-table mapping, and managing schema migrations. Alternatively, `github.com/jmoiron/sqlx` can be used for a lighter-weight abstraction over `database/sql`.
-            - Defines service interfaces (e.g., `AccountService`, `CallService`) and their implementations. Go structs will represent database entities.
-        - **`utils` Package (or `common`):**
-            - Contains shared utility functions (e.g., time converters, string manipulation), custom error types, and application-wide constants (using Go's typed constants or enums where appropriate).
+            - Contains the `XMLProcessor` for fetching and parsing AgbaraXML from URLs specified in `Application` entities or `<Redirect>` verbs.
+            - Works in conjunction with the `interpreter` package to execute AgbaraXML verbs.
+        - **`interpreter` Package:**
+            - Takes parsed AgbaraXML elements and executes them, interacting with the `esl` package for Freeswitch commands and the `services` package for database updates.
+        - **`esl` Package:**
+            - Manages all Freeswitch ESL interactions.
+            - Uses the **`github.com/fiorix/go-eventsocket`** library for ESL communication.
+            - `outbound.go`: Implements the Outbound ESL server that listens for connections from Freeswitch. Each connection is handled in a separate goroutine, processing AgbaraXML and ESL events.
+            - `inbound.go`: Implements the Inbound ESL client used by services (e.g., `CallService`) to send commands like `originate` to Freeswitch.
+        - **`services` Package:**
+            - Encapsulates business logic and data persistence operations.
+            - `account_service.go`, `application_service.go`, `call_service.go`, `conference_service.go`, `sms_service.go`.
+            - Database Interaction: Uses **GORM** (`gorm.io/gorm`) as the ORM with the PostgreSQL driver `github.com/lib/pq`.
+            - Defines service interfaces (e.g., `IAccountService`, `IApplicationService`, `CallServicerForESL`) and their implementations. Go structs in the `domain` package represent database entities.
+        - **`domain` Package:**
+            - Defines core data structures (structs for DB entities like `Account`, `Call`, `Application`, etc.), enums (e.g., `CallStatus`, `AccountType`), and interfaces for services and ESL execution.
+            - Contains AgbaraXML verb struct definitions and their `Execute` methods.
+        - **`config` Package:**
+            - Manages application configuration loading from `config.yml` and environment variables using **Viper** (`github.com/spf13/viper`).
+        - **`database` Package:**
+            - Handles database initialization (`InitDB`) and provides GORM DB instance.
+        - **`logging` Package:**
+            - Initializes structured logging using **Logrus** (`github.com/sirupsen/logrus`).
+        - **`utils` Package:**
+            - Contains shared utility functions (e.g., SID generation) and custom error types.
+            - `httpclient` sub-package for making HTTP requests to fetch AgbaraXML.
     - **Concurrency Model:**
-        - API requests handled by Gin will typically run in separate goroutines.
-        - Each Freeswitch ESL connection (especially in outbound mode) will be managed in its own goroutine.
-        - Go channels will be used for safe inter-goroutine communication, particularly for dispatching ESL events or managing results from asynchronous operations.
-    - **Main Application (`cmd/<appname>/main.go`):**
-        - Initializes global configurations (e.g., using Viper from YAML/JSON files or environment variables).
-        - Sets up structured logging (e.g., Logrus or Zap).
-        - Establishes and manages database connection pools.
-        - Initializes and starts ESL client/server components.
-        - Sets up and runs the Gin HTTP server.
-        - Implements graceful shutdown mechanisms to release resources properly.
+        - API requests are handled by Gin, typically in separate goroutines per request.
+        - Each Freeswitch ESL connection in outbound mode is managed in its own goroutine.
+        - Go channels are used for inter-goroutine communication, particularly for dispatching new XML elements obtained via async operations (e.g., `Dial` action URL, `Record` callback URL) back to the main call processing loop.
+    - **Main Application (`cmd/agbaravoip_server/main.go`):**
+        - Initializes configuration using Viper.
+        - Sets up Logrus for structured logging.
+        - Initializes the database connection pool (GORM).
+        - Initializes all services, ESL client/server components, and the XML processor.
+        - Sets up and runs the Gin HTTP server for the REST API.
+        - Implements graceful shutdown for all components (HTTP server, ESL outbound server, ESL inbound client connections, database connections).
 
 ## 4. PostgreSQL Database Schema
     - **General Conventions:**
         - Table and column names: `snake_case`.
-        - Primary Keys: Each table will have an `id BIGSERIAL PRIMARY KEY`.
-        - External Identifiers: The existing `sid VARCHAR(64) UNIQUE NOT NULL` concept (e.g., "ACxxxxx") will be retained as a unique, indexed column for external references.
-        - Audit Timestamps: `created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'UTC')` and `updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'UTC')` (the latter updated by a trigger).
-    - **Table Definitions:**
-        - **`accounts`**: `id`, `sid`, `parent_sid` (self-referential FK), `friendly_name`, `phone_number`, `auth_token` (to be hashed), `type` (ENUM: 'trial', 'full'), `status` (ENUM: 'active', 'suspended', 'closed'), `created_at`, `updated_at`. Indexes on `sid`, `parent_sid`, `auth_token`.
+        - Primary Keys: Each table has an `id BIGSERIAL PRIMARY KEY`.
+        - External Identifiers: `sid VARCHAR(64) UNIQUE NOT NULL` for external references (e.g., "ACxxxxx", "APyyyyy").
+        - Audit Timestamps: `created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'UTC')` and `updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'UTC')` (the latter updated by a trigger function `update_updated_at_column`).
+        - Soft Deletes: Some tables (e.g., `calls`) include a `deleted_at TIMESTAMP WITHOUT TIME ZONE NULL` field, compatible with GORM's soft delete feature.
+    - **Table Definitions (Reflecting Migrations up to `000010_create_gateways_table.up.sql`):**
+        - **`accounts`**: `id`, `sid`, `parent_sid` (FK to `accounts.sid`), `friendly_name`, `phone_number`, `auth_token` (hashed bcrypt), `type` (ENUM `account_type`: 'trial', 'full'), `status` (ENUM `account_status`: 'active', 'suspended', 'closed'), `created_at`, `updated_at`. Indexes on `sid`, `parent_sid`, `auth_token`.
         - **`applications`**: `id`, `sid`, `account_sid` (FK to `accounts.sid`), `friendly_name`, `voice_url`, `voice_method`, `voice_fallback_url`, `voice_fallback_method`, `status_callback_url`, `status_callback_method`, `sms_url`, `sms_method`, `sms_fallback_url`, `sms_fallback_method`, `sms_status_callback_url`, `sms_status_callback_method`, `heartbeat_url`, `created_at`, `updated_at`. Indexes on `sid`, `account_sid`.
-        - **`calls`**: `id`, `sid`, `account_sid` (FK), `caller_id`, `callee_id`, `application_sid` (FK to `applications.sid`, nullable), `answer_url`, `status` (ENUM: 'queued', 'ringing', 'in-progress', 'completed', 'failed', 'busy', 'no-answer'), `direction` (ENUM: 'inbound', 'outbound-api', 'outbound-dial'), `duration_seconds`, `price` (NUMERIC), `answered_by`, `timeout_seconds`, `start_time`, `answer_time`, `end_time`, `hangup_cause` (VARCHAR), `created_at`, `updated_at`. Indexes on `sid`, `account_sid`, `status`, `direction`, `start_time`.
-        - **`freeswitch_servers`**: `id`, `sid`, `host`, `port`, `password` (encrypted), `outbound_address`, `is_active`, `created_at`, `updated_at`. Index on `sid`.
-        - **`gateways`**: `id`, `sid`, `freeswitch_server_sid` (FK, nullable), `gateway_string`, `codecs`, `retry_count`, `timeout_seconds`, `routes` (TEXT or JSONB), `friendly_name`, `created_at`, `updated_at`. Index on `sid`.
-        - **`recordings`**: `id`, `sid`, `account_sid` (FK), `call_sid` (FK, nullable), `conference_sid` (FK to `conferences.sid`, nullable), `duration_seconds`, `file_path` (URL or path), `format`, `size_bytes`, `created_at`, `updated_at`. Indexes on `sid`, `account_sid`, `call_sid`, `conference_sid`.
-        - **`sms_messages`**: `id`, `sid`, `account_sid` (FK), `from_number`, `to_number`, `body` (TEXT), `status` (ENUM: 'queued', 'sent', 'failed', 'delivered', 'undelivered'), `direction` (ENUM), `price` (NUMERIC), `error_code`, `error_message`, `sent_at`, `created_at`, `updated_at`. Indexes on `sid`, `account_sid`, `status`.
-        - **`conferences`**: `id`, `sid`, `account_sid` (FK), `friendly_name`, `status` (ENUM: 'init', 'in-progress', 'completed'), `start_time`, `end_time`, `created_at`, `updated_at`. Indexes on `sid`, `account_sid`.
-        - **`conference_participants`**: `id`, `sid`, `conference_sid` (FK), `call_sid` (FK, unique), `account_sid` (FK), `is_muted`, `is_moderator`, `join_time`, `leave_time`. Indexes on `sid`, `conference_sid`, `call_sid`.
-    - **Database Migrations:** Use a tool like `golang-migrate/migrate` (`github.com/golang-migrate/migrate`) to manage schema evolution through versioned SQL migration files.
+        - **`calls`**: `id`, `sid`, `account_sid` (FK), `application_sid` (FK, nullable), `from_num`, `to_num`, `answer_url`, `status` (ENUM `call_status`: 'queued', 'initiated', 'ringing', 'in-progress', 'completed', 'failed', 'busy', 'no-answer', 'canceled'), `direction` (ENUM `call_direction`: 'inbound', 'outbound-api', 'outbound-dial'), `duration_seconds`, `price` (NUMERIC(10, 5)), `answered_by`, `timeout_seconds`, `start_time`, `answer_time`, `end_time`, `hangup_cause` (VARCHAR), `forwarded_from`, `created_at`, `updated_at`, `deleted_at`. Indexes on `sid`, `account_sid`, `application_sid`, `status`, `direction`, `created_at`, `start_time`, `from_num`, `to_num`.
+        - **`recordings`**: `id`, `sid`, `account_sid` (FK), `call_sid` (FK, nullable), `conference_sid` (FK to `conferences.sid`, nullable), `duration_seconds` (INT), `file_path` (VARCHAR), `format` (VARCHAR), `size_bytes` (BIGINT), `created_at`, `updated_at`. Indexes on `sid`, `account_sid`, `call_sid`, `conference_sid`.
+        - **`conferences`**: `id`, `sid`, `account_sid` (FK), `friendly_name`, `status` (VARCHAR, e.g., 'initializing', 'in-progress', 'completed'), `start_time`, `end_time`, `created_at`, `updated_at`. Indexes on `sid`, `account_sid`, `friendly_name`, `status`.
+        - **`conference_participants`**: `id`, `sid`, `conference_sid` (FK), `call_sid` (FK, unique), `account_sid` (FK), `is_muted` (BOOLEAN), `is_moderator` (BOOLEAN), `join_time`, `leave_time`. Indexes on `sid`, `conference_sid`, `call_sid`, `account_sid`.
+        - **`sms_messages`**: `id`, `sid`, `account_sid` (FK), `msg_to`, `msg_from`, `body` (TEXT), `status` (VARCHAR, e.g., 'queued', 'sent', 'failed', 'delivered', 'received'), `direction` (VARCHAR), `price` (VARCHAR), `price_unit` (VARCHAR), `error_code` (INT, nullable), `error_message` (TEXT, nullable), `gateway_message_sid` (VARCHAR, nullable), `sent_at` (nullable), `delivered_at` (nullable), `created_at`, `updated_at`. Indexes on `sid`, `account_sid`, `status`, `direction`, `msg_to`, `msg_from`, `gateway_message_sid`, `created_at`.
+        - **`freeswitch_servers`**: `id`, `sid`, `host`, `port` (INT), `password` (TEXT), `outbound_address` (nullable), `is_active` (BOOLEAN), `created_at`, `updated_at`. Indexes on `host`, `port`, `is_active`.
+        - **`gateways`**: `id`, `sid`, `account_sid` (FK), `freeswitch_server_sid` (FK, nullable), `friendly_name`, `gateway_string` (TEXT), `codecs` (TEXT[]), `retry_count` (INT), `timeout_seconds` (INT), `routes` (JSONB, nullable), `is_enabled` (BOOLEAN), `created_at`, `updated_at`. Indexes on `account_sid`, `freeswitch_server_sid`, `is_enabled`.
+    - **Database Migrations:** Uses `github.com/golang-migrate/migrate` for schema evolution through versioned SQL migration files located in `db/migrations/`. Migrations are applied by the application at startup if configured, or manually via the migrate CLI.
 
 ## 5. Freeswitch Interaction in GoLang
-    - **ESL Library/Package:** Primary choice: `github.com/fiorix/go-eventsocket` (fsesl). If limitations are found, a custom wrapper or minimal library focusing on core needs might be developed.
+    - **ESL Library/Package:** Uses `github.com/fiorix/go-eventsocket` for core ESL communication.
     - **Inbound ESL Mode (Go App to Freeswitch):**
-        - The `callcontrol` or `api` service will manage a connection (or pool of connections) to Freeswitch.
-        - API calls requiring Freeswitch actions (e.g., originate call) will translate to ESL commands (`originate`, `uuid_bridge`, `uuid_playback`, `uuid_kill`) sent over this connection.
-        - Synchronous responses will be handled to confirm command execution.
+        - The `esl.FSInboundClient` manages a persistent connection to Freeswitch.
+        - Services (primarily `CallService`) use this client to send commands like `bgapi originate` for outbound calls.
     - **Outbound ESL Mode (Freeswitch to Go App):**
-        - The `callcontrol` service will run a TCP server (e.g., using `net.Listen`) on a configured port.
-        - Each incoming Freeswitch ESL connection (representing a call leg) will be handled in a dedicated goroutine.
-        - Initial handshake: Send `connect` ESL command, process response to get channel variables (UUID, Answer URL, Account SID, etc.). Subscribe to necessary events (`CHANNEL_HANGUP_COMPLETE`, `CHANNEL_EXECUTE_COMPLETE`, `DTMF`, relevant `CUSTOM` events).
-    - **Call Control Logic (AgbaraXML Equivalence):**
-        - **Initial Phase (Option A):** The Go `callcontrol` service will fetch an XML document from the `answer_url`. It will parse this XML using `encoding/xml`. For each AgbaraXML verb, a corresponding Go function will execute the necessary ESL commands via the active ESL connection for that call. `<Redirect>` will trigger fetching a new XML document.
+        - The `esl.FSOutboundServer` listens on a TCP port (configured via `FS_OUTBOUND_LISTEN_ADDRESS`, e.g., `:8084`).
+        - Freeswitch's dialplan (e.g., using the `socket` application) connects to this port for calls requiring AgbaraXML processing.
+        - Each incoming ESL connection is handled in a dedicated goroutine.
+        - Initial handshake: `connect` ESL command is received, channel variables (UUID, Answer URL, Account SID, etc.) are extracted to populate a `callcontrol.CallContext`. The connection subscribes to `CONFERENCE_MAINTENANCE` and other necessary events. `linger` is sent to keep the connection active. The call is answered if not already answered.
+    - **Call Control Logic (AgbaraXML Processing):**
+        - The `esl.FSOutboundServer`'s connection handler fetches an AgbaraXML document from the `answer_url` (or subsequent redirect URLs) using the `callcontrol.XMLProcessor`.
+        - The `xmlProcessor` uses an HTTP client (from `utils/httpclient`) to fetch and parse the XML into `domain.CallControlElement` structs.
+        - The `interpreter.ExecuteAgbaraXML` function iterates through the parsed elements. Each element's `Execute` method (defined in `domain/call_control.go`) is called.
+        - These `Execute` methods use an `domain.EslConnectionExecutor` interface (implemented by `esl.ESLConnectionAdapter`) to send commands to Freeswitch (e.g., `playback`, `speak`, `uuid_record_session`, `conference`, `hangup`).
+        - The result of execution (e.g., `ActionRedirect`, `ActionHangup`, `ActionContinue`) dictates the next step in the call flow.
     - **Event Handling:**
-        - The chosen ESL library (or custom implementation) must provide a way to receive and parse all asynchronous events from Freeswitch.
-        - Events will be dispatched (likely via channels) to the goroutine managing the specific call session (identified by Freeswitch Channel UUID).
-        - Specific handlers for `CHANNEL_HANGUP_COMPLETE`, `CHANNEL_EXECUTE_COMPLETE`, `DTMF`, etc., will update call state and drive the logic flow (e.g., proceed to next XML verb after playback completion).
-    - **State Management for Active Calls:** State for each call controlled via outbound ESL (e.g., current XML processing state, collected digits) will be managed within its handling goroutine, potentially using structs. For distributed setups or resilience, this state might need caching in Redis or similar.
+        - The `esl.FSOutboundServer`'s event handler (`handleEslEvents`) reads events from the ESL connection.
+        - Events like `RECORD_STOP`, `CHANNEL_ANSWER` (for B-legs of `<Dial>`), `CHANNEL_HANGUP` (for A-leg or B-legs), and `CONFERENCE_MAINTENANCE` are processed.
+        - Event handlers update call/conference/participant state in the database via `CallService` or `ConferenceService`.
+        - For events that trigger further XML processing (e.g., `RECORD_STOP` with an `action` URL), new XML is fetched and parsed, and the resulting elements are sent to the main call processing loop via a channel in `CallContext`.
+    - **State Management for Active Calls:**
+        - `callcontrol.CallContext` holds state for each active call leg managed by the outbound ESL server, including channel variables, pending operations (like `Record` or `Dial`), and the channel for sending new XML elements.
 
-## 6. API Endpoint Plan
-    - **General Principles:** Stateless, JSON request/response, authentication on protected routes, versioned (e.g., `/v1`).
-    - **Endpoints (Grouped by Resource):**
-        - **Account Management:** `POST /v1/accounts`, `POST /v1/accounts/{account_sid}/subaccounts`, `GET /v1/accounts/{account_sid}`, `GET /v1/accounts/{account_sid}/subaccounts`, `PUT /v1/accounts/{account_sid}`.
-        - **Application Management:** `POST /v1/accounts/{account_sid}/applications`, `GET /v1/accounts/{account_sid}/applications/{app_sid}`, `GET /v1/accounts/{account_sid}/applications`, `PUT /v1/accounts/{account_sid}/applications/{app_sid}`, `DELETE /v1/accounts/{account_sid}/applications/{app_sid}`.
-        - **Call Management:** `POST /v1/accounts/{account_sid}/calls` (originate), `GET /v1/accounts/{account_sid}/calls/{call_sid}`, `GET /v1/accounts/{account_sid}/calls` (list with filters), `PUT /v1/accounts/{account_sid}/calls/{call_sid}` (e.g., hangup/redirect).
-        - **In-Call Control (Sub-resources):** `POST .../calls/{call_sid}/play`, `POST .../calls/{call_sid}/say`, `POST .../calls/{call_sid}/dtmf`, `POST .../calls/{call_sid}/record/start`, `POST .../calls/{call_sid}/record/stop`.
-        - **Conference Management:** `GET .../conferences`, `GET .../conferences/{conf_sid}`. Participants: `GET .../{conf_sid}/participants`, `GET .../{conf_sid}/participants/{participant_call_sid}`, `PUT .../{conf_sid}/participants/{participant_call_sid}` (mute/kick), `POST .../{conf_sid}/participants` (add via dial-out). Conference Actions: `POST .../{conf_sid}/play`, `POST .../{conf_sid}/say`, `POST .../{conf_sid}/record/start`, `POST .../{conf_sid}/record/stop`.
-        - **Recording Management:** `GET .../recordings`, `GET .../recordings/{rec_sid}`, `DELETE .../recordings/{rec_sid}`.
-        - **SMS Management:** `POST .../sms/messages` (send), `GET .../sms/messages/{sms_sid}`, `GET .../sms/messages` (list).
-        - **(Potential Admin Endpoints):** For Freeswitch Server & Gateway CRUD.
+## 6. API Endpoint Plan (Current Implementation - Phase 6)
+    - **General Principles:** Stateless, JSON request/response, JWT authentication for protected routes, versioned (`/api/v1`). Public master account creation. Inbound SMS uses a separate mechanism (not user JWT).
+    - **Authentication Endpoint:**
+        - `POST /api/v1/auth/token`: Generates a JWT token. (DTO: `AuthRequest`, `AuthResponse`) - Requires Basic Auth with Account SID and Auth Token.
+    - **Account Management:**
+        - `POST /api/v1/accounts`: Creates a new master account. (DTO: `CreateAccountRequest`, `AccountResponse`) - Publicly accessible.
+        - `GET /api/v1/accounts/{account_sid}`: Retrieves account details. (DTO: `AccountResponse`) - JWT Auth.
+        - `PUT /api/v1/accounts/{account_sid}`: Updates account details. (DTO: `UpdateAccountRequest`, `AccountResponse`) - JWT Auth.
+        - `POST /api/v1/accounts/{account_sid}/subaccounts`: Creates a subaccount. (DTO: `CreateAccountRequest`, `AccountResponse`) - JWT Auth (Master Account).
+        - `GET /api/v1/accounts/{account_sid}/subaccounts`: Lists subaccounts. (DTO: List of `AccountResponse`) - JWT Auth (Master Account).
+    - **Application Management (all under `/api/v1/accounts/{account_sid}/applications`, require JWT Auth):**
+        - `POST /`: Creates an application. (DTO: `CreateApplicationRequest`, `ApplicationResponse`)
+        - `GET /`: Lists applications. (DTO: List of `ApplicationResponse`)
+        - `GET /{app_sid}`: Retrieves application details. (DTO: `ApplicationResponse`)
+        - `PUT /{app_sid}`: Updates an application. (DTO: `UpdateApplicationRequest`, `ApplicationResponse`)
+        - `DELETE /{app_sid}`: Deletes an application.
+    - **Call Management (all under `/api/v1/accounts/{account_sid}/calls`, require JWT Auth):**
+        - `POST /`: Originates an outbound call. (DTO: `CreateCallRequest`, `CallResponse`)
+        - `GET /{call_sid}`: Retrieves call details. (DTO: `CallResponse`)
+        - `GET /`: Lists calls with filters. (DTO: List of `CallResponse`)
+    - **SMS Management:**
+        - `POST /api/v1/sms/inbound`: Endpoint for SMS gateways to deliver inbound messages. (DTO: specific gateway format, processed by `SMSHandler`) - Authentication is gateway-specific, not user JWT.
+    - **Health Check:**
+        - `GET /api/v1/health`: Basic health check endpoint.
+    - **Features Handled by AgbaraXML (Not Direct REST APIs):**
+        - **In-Call Control:** Modifying active calls (e.g., play audio, speak text, send DTMF, hangup specific leg, conditional redirect) is done via AgbaraXML verbs like `<Play>`, `<Say>`, `<Hangup>`, `<Redirect>`, `<Record>`, `<Gather>`.
+        - **Conference Management:** Creation of conferences and management of participants (add, remove, mute, kick) are primarily handled via the `<Conference>` and `<Dial><Conference/></Dial>` AgbaraXML verbs. There are no direct REST APIs for managing live conferences or participants.
+        - **Recording Management:** Starting/stopping recordings is done via the `<Record>` AgbaraXML verb. Listing and retrieving recordings is not yet exposed via a REST API.
+        - **Outbound SMS Sending (API-initiated):** While inbound SMS is handled, and `<Sms>` verb in AgbaraXML can send SMS during a call flow, a direct REST API endpoint like `POST /accounts/{account_sid}/sms/messages` for users to send arbitrary SMS messages is not yet implemented.
 
 ## 7. Authentication and Authorization Strategy
     - **Authentication:**
-        - **Initial:** HTTP Basic Authentication. Middleware in Gin to parse `Authorization: Basic <base64(account_sid:auth_token)>` and validate against `accounts` table.
-        - **Future Enhancement:** JWT-based authentication. Add `POST /v1/auth/token` endpoint. API expects `Authorization: Bearer <jwt>`.
+        - **Primary API Authentication:** JWT-based. Clients authenticate using `POST /api/v1/auth/token` (which itself requires HTTP Basic Auth with Account SID and Auth Token) to obtain a JWT. Subsequent requests to protected API endpoints must include this JWT in the `Authorization: Bearer <token>` header. This is handled by `JWTMiddleware`.
+        - **Master Account Creation:** The `POST /api/v1/accounts` endpoint is publicly accessible for new user signup and does not require prior authentication.
+        - **Inbound SMS Endpoint:** The `POST /api/v1/sms/inbound` endpoint uses a separate, non-JWT mechanism suitable for SMS gateway webhooks (details would depend on gateway integration, currently open or uses a simple shared secret/IP allowlist if implemented).
     - **Authorization:**
-        - **Ownership-Based:** Primarily based on the authenticated `account_sid` extracted from the token/credentials. API handlers and service layer functions will ensure users can only access/modify their own resources. Database queries will be scoped by `account_sid`.
-        - **Parent/Subaccount:** Master accounts can manage their subaccounts. Subaccounts operate within their own scope.
-        - **(Future) RBAC:** For administrative roles, a more detailed RBAC system might be needed (Users, Roles, Permissions).
-    - **Implementation:** Gin middleware for authentication. Authorization checks within service logic and database queries.
+        - **Ownership-Based (Account SID):** Most authenticated API endpoints are scoped by `account_sid` present in the URL path (e.g., `/api/v1/accounts/{account_sid}/...`). The `AccountAccessMiddleware` ensures that the `account_sid` from the JWT claim matches the `account_sid` in the path, preventing users from accessing resources of other accounts.
+        - **Service Layer Checks:** Service logic further reinforces that operations are performed only on resources belonging to the authenticated account.
+        - **Parent/Subaccount:** Master accounts (those with `parent_sid = NULL`) can create and list their subaccounts. Subaccounts, once created and using their own credentials for JWT, operate within their own scope.
+    - **Implementation:**
+        - `auth.InitJWTSecret` initializes the JWT secret key from configuration.
+        - `api.JWTMiddleware` validates JWTs for protected routes.
+        - `api.AccountAccessMiddleware` enforces that the JWT's account SID matches the path parameter.
+        - `services.AccountService.ValidateCredentials` is used by the `/auth/token` endpoint to verify Account SID and Auth Token against the `accounts` table (hashed `auth_token`).
 
 ## 8. Deployment and Configuration
     - **Deployment Strategy:**
-        - **Containerization:** GoLang application (statically linked binary in a minimal Docker image like Alpine or Scratch), PostgreSQL (official image), and Freeswitch (official or community image) will all be containerized using Docker.
-        - **Orchestration:**
-            - **Development/Testing/Simple Production:** `docker-compose.yml` for managing the multi-container setup.
-            - **Advanced Production:** Kubernetes for scalability, high availability, and automated management (Deployments, StatefulSets for DB, Services, ConfigMaps, Secrets, PersistentVolumeClaims).
+        - **Containerization:** The GoLang application, PostgreSQL, and Freeswitch are containerized using Docker.
+            - The Go application is built into a minimal Alpine Linux image using a multi-stage Dockerfile (`agbaravoip_golang/Dockerfile`). The final image includes the compiled binary and `config.yml`.
+        - **Orchestration (Development/Testing):** `agbaravoip_golang/docker-compose.yml` is used for managing the multi-container setup.
+            - Defines three services: `app` (the Go application), `db` (PostgreSQL 15 Alpine), and `freeswitch` (signalwire/freeswitch:latest).
+            - Uses a bridge network `agbaravoip_network` for inter-service communication.
+            - `app` service exposes port 8080 (configurable via `config.yml`).
+            - `db` service exposes port 5432 and uses a volume `postgres_data` for data persistence. Includes a healthcheck.
+            - `freeswitch` service exposes ESL port 8021, SIP ports (5060, 5080 UDP), and RTP ports. Uses a volume `freeswitch_data`.
     - **Configuration Management:**
-        - **Primary:** Environment variables (following 12-factor app principles).
-        - **Secondary/Defaults:** Configuration files (e.g., `config.yml` or `config.json`) loaded by the Go application using a library like **Viper** (`github.com/spf13/viper`). Environment variables will override file values.
-    - **Key Configuration Parameters:** API port, PostgreSQL connection details (host, port, user, pass, dbname, pool settings), Freeswitch ESL connection details (inbound & outbound), log level, JWT secrets (if used).
-    - **Database Deployment:** Use Docker volumes or Kubernetes PersistentVolumes for PostgreSQL data persistence. Implement regular backup strategy. Use `golang-migrate/migrate` for schema migrations, applied during deployment.
+        - Configuration is managed by **Viper** (`github.com/spf13/viper`).
+        - A `config.yml` file (located at `agbaravoip_golang/config.yml` and copied into the Docker image at `/root/config.yml`) provides default settings.
+        - Environment variables can override values from `config.yml`.
+        - **Key Configuration Parameters (from `config.yml`):**
+            - `SERVER_PORT`: Port for the Go API server (e.g., "8080").
+            - `LOG_LEVEL`: Logging level (e.g., "debug", "info").
+            - `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `DB_SCHEMA`: PostgreSQL connection details.
+            - `FS_ADDRESS`, `FS_PORT`, `FS_PASSWORD`: Freeswitch ESL connection details for inbound commands.
+            - `FS_OUTBOUND_LISTEN_ADDRESS`: Address and port for the Go app's outbound ESL server to listen on (e.g., ":8084").
+            - (Implicitly via `config.AppConfig` struct) `AUTH_JWT_SECRET`, `AUTH_JWT_TOKEN_DURATION`: JWT settings.
+    - **Database Deployment & Migrations:**
+        - PostgreSQL is deployed as a Docker container.
+        - Database schema migrations are managed using `github.com/golang-migrate/migrate`. SQL migration files are located in `agbaravoip_golang/db/migrations/`.
+        - Migrations are applied automatically at application startup by `database.InitDB()`.
 
-## 9. Phased Implementation Roadmap
-    - **Phase 0: Setup and Core Foundation:** Project structure, Docker setup, basic config/logging, initial DB schema (accounts, applications) & migrations, basic ESL connectivity tests.
-    - **Phase 1: Account Management & Authentication:** API for Account CRUD, Basic Auth implementation.
-    - **Phase 2: Application Management & Basic Call Origination:** API for Application CRUD, API to originate calls (Freeswitch fetches static XML via `answer_url`), basic CDR logging.
-    - **Phase 3: Core AgbaraXML-like Processing (Outbound ESL):** Go ESL server, fetch & parse XML, implement `<Say>`, `<Play>`, `<Hangup>`, `<Pause>`, `<Redirect>`.
-    - **Phase 4: Advanced Call Control Features:** Implement `<Gather>`, `<Record>`, basic `<Dial>` (single number). `recordings` table.
-    - **Phase 5: Conference Calls & Complex Dial:** Implement `<Conference>` verb, enhance `<Dial>` for conferences. Conference APIs. `conferences` & `conference_participants` tables.
-    - **Phase 6: SMS Functionality:** SMS APIs, interaction with SMS gateway (mock or real), `sms_messages` table.
-    - **Phase 7: Advanced Features, Security Hardening, Scalability:** Remaining features, JWT auth, admin APIs, security review, performance testing, potential microservice refactoring. Monitoring/alerting setup.
-    - **Phase 8: Documentation & Production Readiness:** Finalize user/API docs, internal tech docs, CI/CD, UAT.
+## 9. Phased Implementation Roadmap (Status as of this Document)
+    - **Phase 0: Setup and Core Foundation:** COMPLETED (Project structure, Docker, config, logging, initial DB schema for accounts/apps, basic ESL connectivity).
+    - **Phase 1: Account Management & Authentication:** COMPLETED (API for Account CRUD, Subaccount CRUD, JWT & Basic Auth for token endpoint).
+    - **Phase 2: Application Management & Basic Call Origination:** COMPLETED (API for Application CRUD, API to originate calls where Freeswitch fetches static XML, basic CDR logging).
+    - **Phase 3: Core AgbaraXML-like Processing (Outbound ESL):** COMPLETED (Go ESL server, fetch & parse XML, implemented `<Say>`, `<Play>`, `<Hangup>`, `<Pause>`, `<Redirect>`).
+    - **Phase 4: Advanced Call Control Features:** COMPLETED (Implemented `<Record>`, basic `<Dial>` for single numbers, `recordings` table and service logic). `<Gather>` defined but not fully implemented.
+    - **Phase 5: Conference Calls & Complex Dial:** COMPLETED (Implemented `<Conference>` verb, `<Dial>` enhanced for conferences, DB tables for `conferences` & `conference_participants`, service logic for conference/participant management, `CONFERENCE_MAINTENANCE` event handling). No direct REST APIs for live conference management.
+    - **Phase 6: SMS Functionality:** COMPLETED (API endpoint for inbound SMS, `<Sms>` AgbaraXML verb for outbound SMS during calls, `sms_messages` table and service logic). No direct REST API for user-initiated outbound SMS.
+    - **Phase 7: Advanced Features, Security Hardening, Scalability:** PENDING (e.g., Admin APIs for Freeswitch Servers/Gateways, full `<Gather>` implementation, security review, performance testing).
+    - **Phase 8: Documentation & Production Readiness:** PARTIALLY COMPLETED (API Documentation updated, this technical documentation updated. CI/CD, UAT pending).
 
-## 10. Future Considerations / Out of Scope for Initial Reimplementation
-    - Advanced Role-Based Access Control (RBAC) for multi-tenant administration.
+## 10. Future Considerations / Out of Scope for Current Implementation
+    - Advanced Role-Based Access Control (RBAC) for multi-tenant administration beyond current JWT account scoping.
+    - Direct REST APIs for live in-call control, conference management, and recording listing/management.
+    - Direct REST API for user-initiated outbound SMS.
+    - Full implementation of `<Gather>` verb including DTMF collection logic.
+    - Admin REST APIs for Freeswitch Server & Gateway CRUD.
     - Real-time dashboards and analytics.
     - WebRTC integration for browser-based clients.
-    - High-availability setup for Freeswitch itself (if not already in place).
+    - High-availability setup for Freeswitch itself.
     - Internationalization and localization for API responses and TTS/ASR.
     - Billing and payment integration.
