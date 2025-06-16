@@ -27,7 +27,8 @@ type Server struct {
 	xmlProcessor       *callcontrol.XMLProcessor
 	freeswitchService services.IFreeswitchServerService
 	gatewayService    services.IGatewayService
-	recordingService  services.IRecordingService // <-- New
+	recordingService  services.IRecordingService
+	conferenceService services.IConferenceService // <-- New
 }
 
 func NewServer(
@@ -39,7 +40,8 @@ func NewServer(
 	xmlProcessor *callcontrol.XMLProcessor,
 	freeswitchService services.IFreeswitchServerService,
 	gatewayService services.IGatewayService,
-	recordingService services.IRecordingService, // <-- New
+	recordingService services.IRecordingService,
+	conferenceService services.IConferenceService, // <-- New
 	processedAdminSIDs []string,
 ) *Server {
 	if cfg.LogLevel != "debug" {
@@ -78,7 +80,8 @@ func NewServer(
 		xmlProcessor:       xmlProcessor,
 		freeswitchService: freeswitchService,
 		gatewayService:    gatewayService,
-		recordingService:  recordingService, // <-- New
+		recordingService:  recordingService,
+		conferenceService: conferenceService, // <-- New
 	}
 	srv.setupRoutes()
 	return srv
@@ -177,6 +180,31 @@ func (s *Server) setupRoutes() {
 			recordingsRoutes.GET("", recordingHandler.ListRecordings)
 			recordingsRoutes.GET("/:recording_sid", recordingHandler.GetRecording)
 			recordingsRoutes.DELETE("/:recording_sid", recordingHandler.DeleteRecording)
+		}
+
+		// Conference Management under an account
+		confHandler := NewConferenceHandler(s.conferenceService, s.callService, s.logger)
+		conferenceRoutes := authenticatedAccountRoutes.Group("/conferences")
+		{
+			conferenceRoutes.GET("", confHandler.ListConferences)
+			conferenceRoutes.GET("/:conf_sid", confHandler.GetConference)
+
+			// Live Conference Control
+			conferenceRoutes.POST("/:conf_sid/play", confHandler.ConferencePlayAudio)
+			conferenceRoutes.POST("/:conf_sid/say", confHandler.ConferenceSayText)
+			conferenceRoutes.POST("/:conf_sid/record", confHandler.ConferenceRecordAction) // For start/stop
+
+			// Participant Listing and Details for a specific conference
+			participantsRoutes := conferenceRoutes.Group("/:conf_sid/participants")
+			{
+				participantsRoutes.GET("", confHandler.ListParticipants)
+				participantsRoutes.GET("/:participant_sid", confHandler.GetParticipant) // participant_sid is CPxxx
+
+				// Live Participant Control
+				// participant_call_sid is used as the member-id for Freeswitch conference commands
+				participantsRoutes.PUT("/:participant_call_sid/mute", confHandler.ParticipantMute)
+				participantsRoutes.POST("/:participant_call_sid/kick", confHandler.ParticipantKick)
+			}
 		}
 	}
 

@@ -662,43 +662,648 @@ The Call resource represents a voice call connection.
         }
         ```
 
+### Live Call Control
+
+These endpoints allow for real-time manipulation of active calls.
+
+#### Play Audio on a Live Call
+
+*   **POST** `/api/v1/accounts/{account_sid}/calls/{call_sid}/play`
+*   **Description:** Initiates playback of an audio file on the specified call leg (defaults to 'aleg').
+*   **Authentication:** JWT Bearer Token
+*   **Path Parameters:**
+    *   `account_sid` (string, required): Your Account SID.
+    *   `call_sid` (string, required): The SID of the live call.
+*   **Request Body:** `application/json` (`CallPlayRequest`)
+    ```json
+    {
+        "url": "http://example.com/audio/prompt.wav",
+        "loop": 1,
+        "legs": "aleg"
+    }
+    ```
+    *   `url` (string, required): The URL of the audio file to play. Must be accessible by the AgbaraVOIP server.
+    *   `loop` (integer, optional): Number of times to loop the playback. `0` or `1` means play once. Service default is `1`. (Note: True multi-looping for `>1` might depend on specific Freeswitch application used by the service and may not be fully supported by simple commands).
+    *   `legs` (string, optional): The call leg(s) to play audio to. Can be `aleg` (default), `bleg`, or `both`.
+*   **Responses:**
+    *   `202 Accepted`:
+        ```json
+        {
+            "call_sid": "CAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "success": true,
+            "message": "Audio playback initiated.",
+            "job_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+        }
+        ```
+    *   `400 Bad Request`: Invalid request payload (e.g., missing URL, invalid legs value).
+    *   `401 Unauthorized`: Invalid or missing JWT.
+    *   `403 Forbidden`: Call does not belong to the account.
+    *   `404 Not Found`: Call SID not found or call is not in a state that allows playback (e.g., already completed).
+    *   `503 Service Unavailable`: Media server (ESL) command failed or client unavailable.
+
+#### Speak Text on a Live Call
+
+*   **POST** `/api/v1/accounts/{account_sid}/calls/{call_sid}/say`
+*   **Description:** Initiates text-to-speech on the specified call leg (defaults to 'aleg').
+*   **Authentication:** JWT Bearer Token
+*   **Path Parameters:**
+    *   `account_sid` (string, required): Your Account SID.
+    *   `call_sid` (string, required): The SID of the live call.
+*   **Request Body:** `application/json` (`CallSayRequest`)
+    ```json
+    {
+        "text": "Hello, this is a test message.",
+        "language": "en-US",
+        "voice": "slt",
+        "legs": "aleg"
+    }
+    ```
+    *   `text` (string, required): The text to speak.
+    *   `language` (string, optional): Language code (e.g., "en-US", "es-ES"). Defaults to system/engine default.
+    *   `voice` (string, optional): Specific voice to use (e.g., "slt", "kal"). Defaults to system/engine default.
+    *   `legs` (string, optional): The call leg(s) to speak text to. `aleg` (default). (Note: `bleg` or `both` might require B-leg UUID for specific targeting with `uuid_speak` and may default to `aleg` in current service implementation).
+*   **Responses:**
+    *   `202 Accepted`:
+        ```json
+        {
+            "call_sid": "CAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "success": true,
+            "message": "Text-to-speech initiated.",
+            "job_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+        }
+        ```
+    *   `400 Bad Request`: Invalid request payload (e.g., missing text).
+    *   `401 Unauthorized`: Invalid or missing JWT.
+    *   `403 Forbidden`: Call does not belong to the account.
+    *   `404 Not Found`: Call SID not found or call is not in a speakable state.
+    *   `503 Service Unavailable`: Media server (ESL) command failed or client unavailable.
+
+#### Send DTMF Tones on a Live Call
+
+*   **POST** `/api/v1/accounts/{account_sid}/calls/{call_sid}/dtmf`
+*   **Description:** Sends a sequence of DTMF tones on the specified call leg (defaults to 'aleg').
+*   **Authentication:** JWT Bearer Token
+*   **Path Parameters:**
+    *   `account_sid` (string, required): Your Account SID.
+    *   `call_sid` (string, required): The SID of the live call.
+*   **Request Body:** `application/json` (`CallDTMFRequest`)
+    ```json
+    {
+        "digits": "1234#",
+        "duration_ms": 250,
+        "legs": "aleg"
+    }
+    ```
+    *   `digits` (string, required): The DTMF digits to send (e.g., "1234#").
+    *   `duration_ms` (integer, optional): Duration for each digit in milliseconds (e.g., 100 to 2000). Actual support may depend on channel variable `dtmf_duration` or Freeswitch configuration.
+    *   `legs` (string, optional): The call leg(s) to send DTMF to. `aleg` (default). (Note: `bleg` or `both` might require B-leg UUID for specific targeting and may default to `aleg` in current service implementation).
+*   **Responses:**
+    *   `202 Accepted`:
+        ```json
+        {
+            "call_sid": "CAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "success": true,
+            "message": "DTMF send initiated.",
+            "job_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+        }
+        ```
+    *   `400 Bad Request`: Invalid request payload (e.g., missing digits).
+    *   `401 Unauthorized`: Invalid or missing JWT.
+    *   `403 Forbidden`: Call does not belong to the account.
+    *   `404 Not Found`: Call SID not found or not in a state for DTMF.
+    *   `503 Service Unavailable`: Media server (ESL) command failed or client unavailable.
+
+#### Manage Call Recording (Start/Stop)
+
+*   **POST** `/api/v1/accounts/{account_sid}/calls/{call_sid}/record`
+*   **Description:** Starts or stops recording on the live call.
+*   **Authentication:** JWT Bearer Token
+*   **Path Parameters:**
+    *   `account_sid` (string, required): Your Account SID.
+    *   `call_sid` (string, required): The SID of the live call.
+*   **Request Body:** `application/json` (`CallRecordRequest`)
+    *   To **start** recording:
+        ```json
+        {
+            "action": "start",
+            "file_name": "my_custom_recording_name",
+            "max_duration_seconds": 3600,
+            "format": "mp3",
+            "play_beep": true
+        }
+        ```
+    *   To **stop** recording:
+        ```json
+        {
+            "action": "stop",
+            "file_name": "my_custom_recording_name.mp3"
+        }
+        ```
+        (Or the specific `recordingName` returned by the start action, or a general stop command if supported by service by omitting `file_name`).
+    *   `action` (string, required): Must be `start` or `stop`.
+    *   `file_name` (string, optional): For `start`, desired base name for the recording file (system may add prefixes/suffixes/timestamps). For `stop`, the specific recording file name/path to stop (as returned by start or known from events). If omitted on `stop`, might attempt to stop based on `call_sid`.
+    *   `max_duration_seconds` (integer, optional, for `start`): Maximum recording duration.
+    *   `format` (string, optional, for `start`): Recording format (e.g., "wav", "mp3"). Defaults to "wav".
+    *   `play_beep` (boolean, optional, for `start`): If true, play a beep sound before starting recording. (Actual beep playback depends on service implementation).
+*   **Responses:**
+    *   `202 Accepted`:
+        ```json
+        {
+            "call_sid": "CAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "success": true,
+            "message": "Call recording started: CAxxxx_timestamp.wav", // Example message for start
+            // "message": "Call recording stop initiated for: my_custom_recording_name.mp3", // Example for stop
+            "job_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+            // "recording_name": "CAxxxx_timestamp.wav" // If CallActionResponse is updated
+        }
+        ```
+    *   `400 Bad Request`: Invalid request payload (e.g., missing action, invalid action).
+    *   `401 Unauthorized`: Invalid or missing JWT.
+    *   `403 Forbidden`: Call does not belong to the account.
+    *   `404 Not Found`: Call SID not found or not in a valid state for the recording action.
+    *   `503 Service Unavailable`: Media server (ESL) command failed or client unavailable.
+
+#### Hang Up a Live Call
+
+*   **POST** `/api/v1/accounts/{account_sid}/calls/{call_sid}/hangup`
+*   **Description:** Terminates (hangs up) an active call.
+*   **Authentication:** JWT Bearer Token
+*   **Path Parameters:**
+    *   `account_sid` (string, required): Your Account SID.
+    *   `call_sid` (string, required): The SID of the live call to hang up.
+*   **Request Body:** None.
+*   **Query Parameters:**
+    *   `cause` (string, optional): Hangup cause to send to Freeswitch (e.g., `NORMAL_CLEARING`). Defaults to `NORMAL_CLEARING`.
+*   **Responses:**
+    *   `202 Accepted`:
+        ```json
+        {
+            "call_sid": "CAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "success": true,
+            "message": "Hangup command accepted.",
+            "job_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+        }
+        ```
+    *   `401 Unauthorized`: Invalid or missing JWT.
+    *   `403 Forbidden`: Call does not belong to the account.
+    *   `404 Not Found`: Call SID not found.
+    *   `503 Service Unavailable`: Media server (ESL) command failed or client unavailable.
+
 ---
-### Note on In-Call Control, Conference/Recording Management, and SMS
+### Note on AgbaraXML vs API Control
 
-The `GOLANG_POSTGRES_IMPLEMENTATION_PLAN.md` outlines several advanced API functionalities:
+While many telephony actions can be controlled via direct API calls (as documented in the Live Call Control, Conference Management, and SMS Management sections), the system also robustly supports call control via **AgbaraXML** documents fetched from your application URLs (`voice_url`, `answer_url`, `sms_url`).
 
-*   **In-Call Control:** Endpoints like `POST .../calls/{call_sid}/play`, `.../say`, `.../dtmf`, `.../record/start`, `.../record/stop`.
-*   **Conference Management:** Endpoints for creating conferences, managing participants, and conference-level actions.
-*   **Recording Management:** Endpoints for listing and retrieving recordings.
-*   **SMS Management:** Endpoints for sending SMS messages (`POST .../sms/messages`) and listing/retrieving SMS details.
+*   **API Control:** Offers direct, imperative manipulation of resources like live calls, conferences, and sending SMS messages. Useful for applications that manage state and logic externally.
+*   **AgbaraXML Control:** Provides a declarative way to define call/SMS flow. The AgbaraVOIP server fetches and processes these XML documents, executing verbs like `<Say>`, `<Play>`, `<Dial>`, `<Record>`, `<Sms>`, `<Conference>`, etc. This is suitable for applications where the call/messaging logic is primarily defined by these XML documents.
 
-**Current Implementation Status:**
-
-The currently available GoLang API handlers (`account_handlers.go`, `application_handlers.go`, `call_handlers.go`) primarily focus on Account, Application, and basic Call (origination, retrieval, listing) management.
-
-**The advanced in-call control, comprehensive conference management, recording management, and SMS sending/management APIs are not directly implemented as discrete REST endpoints in this version of the GoLang service.**
-
-Instead, these functionalities are expected to be primarily handled via **AgbaraXML** returned by your application URLs (`voice_url`, `answer_url`). For example:
-*   To play audio in a call, your AgbaraXML would use the `<Play>` verb.
-*   To record a call, your AgbaraXML would use the `<Record>` verb.
-*   To initiate a conference, your AgbaraXML would use the `<Dial><Conference>...</Conference></Dial>` verbs.
-*   Sending SMS messages is not covered by the current API handlers. This functionality, as per the original system design, might be handled through different mechanisms or is pending full reimplementation in the GoLang service's REST API.
-
-The GoLang service processes this AgbaraXML and translates the verbs into commands for the Freeswitch media server. Future versions of the API may expose more of these features directly via REST endpoints. Refer to the AgbaraXML documentation for details on available verbs and their usage.
+Both methods can be used. For example, a call might be initiated via the API, with its `answer_url` pointing to an AgbaraXML document that defines the initial call flow. Later, the same call could be modified using the Live Call Control APIs.
 
 ---
 
-## 4. SMS (Short Message Service)
+## 4. SMS Management
 
-As noted in the section above, the `GOLANG_POSTGRES_IMPLEMENTATION_PLAN.md` includes plans for SMS message management API endpoints:
-*   `POST /v1/accounts/{account_sid}/sms/messages` (Send SMS)
-*   `GET /v1/accounts/{account_sid}/sms/messages/{sms_sid}` (Get SMS details)
-*   `GET /v1/accounts/{account_sid}/sms/messages` (List SMS messages)
+Manage sending and retrieving SMS messages associated with your account.
+Inbound SMS messages are typically received via a webhook configured on your Application's `sms_url`, which should return AgbaraXML for processing.
 
-**Current Implementation Status:**
-These specific REST API endpoints for sending and managing SMS messages are **not yet implemented** in the current GoLang service handlers.
+### Send an SMS Message
 
-SMS functionality (particularly receiving SMS and potentially sending them via application logic) would typically be defined by the `sms_url` and related settings in your **Application** resource, which would then process incoming messages using AgbaraXML or custom logic on your application server. Direct API-based SMS sending is not available in this version.
+*   **POST** `/api/v1/accounts/{account_sid}/sms/messages`
+*   **Description:** Sends a new outbound SMS message from your account.
+*   **Authentication:** JWT Bearer Token
+*   **Path Parameters:**
+    *   `account_sid` (string, required): Your Account SID.
+*   **Request Body:** `application/json` (`SendSMSRequest`)
+    ```json
+    {
+        "from": "+15005550006",
+        "to": "+15005550007",
+        "body": "Hello from AgbaraVOIP API!",
+        "status_callback_url": "https://yourapp.com/sms_status_updates"
+    }
+    ```
+    *   `from` (string, required): The sender ID or phone number. Must be a number associated with your account or a valid alphanumeric sender ID (if supported by the carrier and your account).
+    *   `to` (string, required): The recipient's phone number in E.164 format.
+    *   `body` (string, required): The text content of the SMS message.
+    *   `status_callback_url` (string, optional): A URL to which AgbaraVOIP will send status updates for this SMS message (e.g., "sent", "failed", "delivered").
+*   **Responses:**
+    *   `201 Created`:
+        ```json
+        {
+            "sid": "SMxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "account_sid": "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "to": "+15005550007",
+            "from": "+15005550006",
+            "body": "Hello from AgbaraVOIP API!",
+            "status": "queued",
+            "direction": "outbound-api",
+            "price": null,
+            "price_unit": null,
+            "error_code": null,
+            "error_message": null,
+            "gateway_message_sid": null,
+            "sent_at": null,
+            "delivered_at": null,
+            "created_at": "2023-10-28T10:00:00Z",
+            "updated_at": "2023-10-28T10:00:00Z"
+        }
+        ```
+    *   `400 Bad Request`: Invalid request payload (e.g., missing required fields).
+    *   `401 Unauthorized`: Invalid or missing JWT.
+    *   `500 Internal Server Error`: Error during SMS processing or gateway interaction.
+
+### List SMS Messages
+
+*   **GET** `/api/v1/accounts/{account_sid}/sms/messages`
+*   **Description:** Retrieves a list of SMS messages associated with your account. Supports filtering.
+*   **Authentication:** JWT Bearer Token
+*   **Path Parameters:**
+    *   `account_sid` (string, required): Your Account SID.
+*   **Query Parameters (Optional):**
+    *   `to` (string): Filter by recipient phone number.
+    *   `from` (string): Filter by sender phone number/ID.
+    *   `status` (string): Filter by SMS status (e.g., `sent`, `failed`, `delivered`, `received`).
+    *   `direction` (string): Filter by SMS direction (`inbound`, `outbound`, `outbound-api`).
+    *   `date_from` (string): Filter messages created on or after this date (YYYY-MM-DD).
+    *   `date_to` (string): Filter messages created on or before this date (YYYY-MM-DD).
+    *   `limit` (integer): Maximum number of records to return (e.g., 50). Default: 20. Max: 100.
+    *   `offset` (integer): Number of records to skip for pagination. Default: 0.
+*   **Responses:**
+    *   `200 OK`:
+        ```json
+        [
+            {
+                "sid": "SMxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "account_sid": "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "to": "+15005550007",
+                "from": "+15005550006",
+                "body": "Hello from AgbaraVOIP API!",
+                "status": "sent",
+                "direction": "outbound-api",
+                // ... other fields ...
+                "created_at": "2023-10-28T10:00:00Z",
+                "updated_at": "2023-10-28T10:00:05Z"
+            },
+            {
+                "sid": "SMaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "account_sid": "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "to": "+15005550006",
+                "from": "+15005550008",
+                "body": "Inbound reply",
+                "status": "received",
+                "direction": "inbound",
+                // ... other fields ...
+                "created_at": "2023-10-28T09:50:00Z",
+                "updated_at": "2023-10-28T09:50:00Z"
+            }
+        ]
+        ```
+    *   `401 Unauthorized`: Invalid or missing JWT.
+    *   `500 Internal Server Error`: Error retrieving SMS messages.
+
+### Get SMS Message Details
+
+*   **GET** `/api/v1/accounts/{account_sid}/sms/messages/{sms_sid}`
+*   **Description:** Retrieves details for a specific SMS message.
+*   **Authentication:** JWT Bearer Token
+*   **Path Parameters:**
+    *   `account_sid` (string, required): Your Account SID.
+    *   `sms_sid` (string, required): The SID of the SMS message to retrieve.
+*   **Responses:**
+    *   `200 OK`: (Structure similar to `SMSMessageResponse` example in Send SMS)
+    *   `401 Unauthorized`: Invalid or missing JWT.
+    *   `404 Not Found`: SMS message SID not found for this account.
+    *   `500 Internal Server Error`: Error retrieving SMS message.
+
+---
+
+## 5. Recordings
+
+Manage metadata for call and conference recordings. These endpoints allow you to list and retrieve information about your recordings and delete their metadata. Deleting recording metadata does not delete the actual audio file from storage.
+
+### List Recordings
+
+*   **GET** `/api/v1/accounts/{account_sid}/recordings`
+*   **Description:** Retrieves a list of recordings associated with your account. Supports filtering.
+*   **Authentication:** JWT Bearer Token
+*   **Path Parameters:**
+    *   `account_sid` (string, required): Your Account SID.
+*   **Query Parameters (Optional):**
+    *   `call_sid` (string): Filter recordings belonging to a specific Call SID.
+    *   `conference_sid` (string): Filter recordings belonging to a specific Conference SID.
+    *   `format` (string): Filter by recording format (e.g., `wav`, `mp3`).
+    *   `date_from` (string): Filter recordings created on or after this date (YYYY-MM-DD).
+    *   `date_to` (string): Filter recordings created on or before this date (YYYY-MM-DD).
+    *   `limit` (integer): Maximum number of records to return. Default: 20. Max: 100.
+    *   `offset` (integer): Number of records to skip for pagination. Default: 0.
+*   **Responses:**
+    *   `200 OK`:
+        ```json
+        [
+            {
+                "sid": "RExxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "account_sid": "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "call_sid": "CAyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+                "conference_sid": null,
+                "duration_seconds": 35,
+                "file_path": "/var/lib/freeswitch/recordings/ACxxxx/CAyyyy_timestamp.wav",
+                "format": "wav",
+                "size_bytes": 560000,
+                "created_at": "2023-10-28T14:30:00Z",
+                "updated_at": "2023-10-28T14:30:35Z"
+            }
+        ]
+        ```
+    *   `401 Unauthorized`: Invalid or missing JWT.
+    *   `500 Internal Server Error`: Error retrieving recordings.
+
+### Get Recording Details
+
+*   **GET** `/api/v1/accounts/{account_sid}/recordings/{recording_sid}`
+*   **Description:** Retrieves details for a specific recording.
+*   **Authentication:** JWT Bearer Token
+*   **Path Parameters:**
+    *   `account_sid` (string, required): Your Account SID.
+    *   `recording_sid` (string, required): The SID of the recording to retrieve.
+*   **Responses:**
+    *   `200 OK`:
+        ```json
+        {
+            "sid": "RExxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "account_sid": "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "call_sid": "CAyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+            "conference_sid": null,
+            "duration_seconds": 35,
+            "file_path": "/var/lib/freeswitch/recordings/ACxxxx/CAyyyy_timestamp.wav",
+            "format": "wav",
+            "size_bytes": 560000,
+            "created_at": "2023-10-28T14:30:00Z",
+            "updated_at": "2023-10-28T14:30:35Z"
+        }
+        ```
+    *   `401 Unauthorized`: Invalid or missing JWT.
+    *   `404 Not Found`: Recording SID not found for this account.
+    *   `500 Internal Server Error`: Error retrieving recording.
+
+### Delete Recording Metadata
+
+*   **DELETE** `/api/v1/accounts/{account_sid}/recordings/{recording_sid}`
+*   **Description:** Deletes the metadata for a specific recording. **This does not delete the actual audio file from storage.**
+*   **Authentication:** JWT Bearer Token
+*   **Path Parameters:**
+    *   `account_sid` (string, required): Your Account SID.
+    *   `recording_sid` (string, required): The SID of the recording metadata to delete.
+*   **Responses:**
+    *   `204 No Content`: Successfully deleted metadata.
+    *   `401 Unauthorized`: Invalid or missing JWT.
+    *   `404 Not Found`: Recording SID not found for this account.
+    *   `500 Internal Server Error`: Error deleting recording metadata.
+
+---
+
+## 6. Conferences
+
+Manage multi-party conference calls. Conferences can be controlled via AgbaraXML (`<Dial><Conference>...</Conference></Dial>`) or through these API endpoints for listing, details, and live control.
+
+### List Conferences
+
+*   **GET** `/api/v1/accounts/{account_sid}/conferences`
+*   **Description:** Retrieves a list of conferences associated with your account.
+*   **Authentication:** JWT Bearer Token
+*   **Path Parameters:**
+    *   `account_sid` (string, required): Your Account SID.
+*   **Query Parameters (Optional):**
+    *   `status` (string): Filter by conference status (e.g., `in-progress`, `completed`, `initializing`).
+    *   `friendly_name` (string): Filter by conference friendly name (supports partial match).
+    *   `date_from` (string): Filter conferences created on or after this date (YYYY-MM-DD).
+    *   `date_to` (string): Filter conferences created on or before this date (YYYY-MM-DD).
+*   **Responses:**
+    *   `200 OK`:
+        ```json
+        [
+            {
+                "sid": "CFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "account_sid": "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "friendly_name": "DailyStandup_Room123",
+                "status": "in-progress",
+                "start_time": "2023-10-28T09:00:00Z",
+                "end_time": null,
+                "created_at": "2023-10-28T08:59:00Z",
+                "updated_at": "2023-10-28T09:00:00Z"
+            }
+        ]
+        ```
+    *   `401 Unauthorized`: Invalid or missing JWT.
+    *   `500 Internal Server Error`: Error retrieving conferences.
+
+### Get Conference Details
+
+*   **GET** `/api/v1/accounts/{account_sid}/conferences/{conf_sid}`
+*   **Description:** Retrieves details for a specific conference.
+*   **Authentication:** JWT Bearer Token
+*   **Path Parameters:**
+    *   `account_sid` (string, required): Your Account SID.
+    *   `conf_sid` (string, required): The SID of the conference to retrieve.
+*   **Responses:**
+    *   `200 OK`:
+        ```json
+        {
+            "sid": "CFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "account_sid": "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "friendly_name": "DailyStandup_Room123",
+            "status": "in-progress",
+            "start_time": "2023-10-28T09:00:00Z",
+            "end_time": null,
+            "created_at": "2023-10-28T08:59:00Z",
+            "updated_at": "2023-10-28T09:00:00Z"
+        }
+        ```
+    *   `401 Unauthorized`: Invalid or missing JWT.
+    *   `404 Not Found`: Conference SID not found for this account.
+    *   `500 Internal Server Error`: Error retrieving conference.
+
+### Live Conference Control
+
+These endpoints allow real-time manipulation of an active conference.
+
+#### Play Audio in Conference
+
+*   **POST** `/api/v1/accounts/{account_sid}/conferences/{conf_sid}/play`
+*   **Description:** Plays an audio file to all participants in the conference.
+*   **Authentication:** JWT Bearer Token
+*   **Path Parameters:**
+    *   `account_sid` (string, required): Your Account SID.
+    *   `conf_sid` (string, required): The SID of the live conference.
+*   **Request Body:** `application/json` (`ConferenceControlPlayRequest`, alias of `CallPlayRequest`)
+    ```json
+    {
+        "url": "http://example.com/audio/announce.wav",
+        "loop": 1
+    }
+    ```
+    *   `url` (string, required): URL of the audio file.
+    *   `loop` (integer, optional): Number of times to play. `0` or `1` for once. Default `1`.
+*   **Responses:**
+    *   `202 Accepted`:
+        ```json
+        {
+            "conference_sid": "CFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "success": true,
+            "message": "Play audio initiated.",
+            "job_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+        }
+        ```
+    *   Common errors: 400, 401, 404 (if conference not found or not in-progress), 503.
+
+#### Speak Text in Conference
+
+*   **POST** `/api/v1/accounts/{account_sid}/conferences/{conf_sid}/say`
+*   **Description:** Speaks text to all participants in the conference using TTS.
+*   **Authentication:** JWT Bearer Token
+*   **Path Parameters:** As above.
+*   **Request Body:** `application/json` (`ConferenceControlSayRequest`, alias of `CallSayRequest`)
+    ```json
+    {
+        "text": "This conference will now be recorded.",
+        "language": "en-US",
+        "voice": "slt"
+    }
+    ```
+*   **Responses:**
+    *   `202 Accepted`:
+        ```json
+        {
+            "conference_sid": "CFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "success": true,
+            "message": "Say text initiated.",
+            "job_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+        }
+        ```
+    *   Common errors: 400, 401, 404, 503.
+
+#### Manage Conference Recording (Start/Stop)
+
+*   **POST** `/api/v1/accounts/{account_sid}/conferences/{conf_sid}/record`
+*   **Description:** Starts or stops recording the conference.
+*   **Authentication:** JWT Bearer Token
+*   **Path Parameters:** As above.
+*   **Request Body:** `application/json` (`ConferenceControlRecordRequest`, alias of `CallRecordRequest`)
+    *   To **start**: `{"action": "start", "file_name": "conf_rec_xyz", "format": "mp3"}`
+    *   To **stop**: `{"action": "stop", "file_name": "conf_rec_xyz.mp3"}` (or specific name from start)
+*   **Responses:**
+    *   `202 Accepted`:
+        ```json
+        {
+            "conference_sid": "CFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "success": true,
+            "message": "Conference recording started: CFxxxx_timestamp.mp3", // Or stop message
+            "job_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+            "recording_name": "CFxxxx_timestamp.mp3" // If action was start
+        }
+        ```
+    *   Common errors: 400, 401, 404, 503.
+
+### Conference Participants
+
+Manage participants within a specific conference.
+
+#### List Participants
+
+*   **GET** `/api/v1/accounts/{account_sid}/conferences/{conf_sid}/participants`
+*   **Description:** Retrieves a list of current participants in the specified conference.
+*   **Authentication:** JWT Bearer Token
+*   **Path Parameters:**
+    *   `account_sid` (string, required): Your Account SID.
+    *   `conf_sid` (string, required): The SID of the conference.
+*   **Responses:**
+    *   `200 OK`:
+        ```json
+        [
+            {
+                "sid": "CPyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+                "conference_sid": "CFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "call_sid": "CAzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+                "account_sid": "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "is_muted": false,
+                "is_moderator": true,
+                "join_time": "2023-10-28T09:00:05Z",
+                "leave_time": null
+            }
+        ]
+        ```
+    *   `401 Unauthorized`.
+    *   `404 Not Found` (Conference not found).
+    *   `500 Internal Server Error`.
+
+#### Get Participant Details
+
+*   **GET** `/api/v1/accounts/{account_sid}/conferences/{conf_sid}/participants/{participant_sid}`
+*   **Description:** Retrieves details for a specific participant in a conference.
+*   **Authentication:** JWT Bearer Token
+*   **Path Parameters:**
+    *   `account_sid` (string, required): Your Account SID.
+    *   `conf_sid` (string, required): The SID of the conference.
+    *   `participant_sid` (string, required): The SID of the participant (e.g., `CPxxxxxxxx`).
+*   **Responses:**
+    *   `200 OK`: (Structure similar to `ParticipantResponse` example in List Participants)
+    *   `401 Unauthorized`.
+    *   `404 Not Found` (Conference or Participant not found).
+    *   `500 Internal Server Error`.
+
+### Live Participant Control
+
+Manage individual participants in an active conference.
+
+#### Mute/Unmute a Participant
+
+*   **PUT** `/api/v1/accounts/{account_sid}/conferences/{conf_sid}/participants/{participant_call_sid}/mute`
+*   **Description:** Sets the mute status for a specific participant in a conference. The `participant_call_sid` refers to the Call SID of the participant's leg in the conference, which often serves as their member ID in Freeswitch.
+*   **Authentication:** JWT Bearer Token
+*   **Path Parameters:**
+    *   `account_sid` (string, required): Your Account SID.
+    *   `conf_sid` (string, required): The SID of the conference.
+    *   `participant_call_sid` (string, required): The Call SID of the participant to mute/unmute.
+*   **Request Body:** `application/json` (`ParticipantMuteRequest`)
+    ```json
+    {
+        "mute": true
+    }
+    ```
+    *   `mute` (boolean, required): `true` to mute, `false` to unmute.
+*   **Responses:**
+    *   `202 Accepted`:
+        ```json
+        {
+            "conference_sid": "CFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "success": true,
+            "message": "Mute action initiated for participant CAzzzzzzzzzzzzzzzzzzzzzzzzzzzz.",
+            "job_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+        }
+        ```
+    *   Common errors: 400, 401, 404, 503.
+
+#### Kick a Participant
+
+*   **POST** `/api/v1/accounts/{account_sid}/conferences/{conf_sid}/participants/{participant_call_sid}/kick`
+*   **Description:** Removes (kicks) a specific participant from a conference. The `participant_call_sid` refers to the Call SID of the participant's leg.
+*   **Authentication:** JWT Bearer Token
+*   **Path Parameters:**
+    *   `account_sid` (string, required): Your Account SID.
+    *   `conf_sid` (string, required): The SID of the conference.
+    *   `participant_call_sid` (string, required): The Call SID of the participant to kick.
+*   **Request Body:** None.
+*   **Responses:**
+    *   `202 Accepted`:
+        ```json
+        {
+            "conference_sid": "CFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "success": true,
+            "message": "Kick action initiated for participant CAzzzzzzzzzzzzzzzzzzzzzzzzzzzz.",
+            "job_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+        }
+        ```
+    *   Common errors: 401, 404, 503.
+
 
 ---
 

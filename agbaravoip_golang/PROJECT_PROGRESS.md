@@ -10,7 +10,7 @@ This document tracks the progress of re-implementing the AgbaraVOIP system in Go
 - [X] Phase 4: Advanced Call Control Features (Gather, Record, Dial-Primitives)
 - [X] Phase 5: Conference Calls & Complex Dial
 - [X] Phase 6: SMS Functionality
-- [ ] Phase 7: Advanced Features, Security Hardening, Scalability
+- [X] Phase 7: Advanced Features, Security Hardening, Scalability & API Expansion
 - [X] Phase 8: Documentation & Production Readiness
 
 ---
@@ -174,6 +174,58 @@ This document tracks the progress of re-implementing the AgbaraVOIP system in Go
     - Handler records messages via `SMSService`, looks up application `SmsURL`, and prepares for (future) AgbaraXML processing from `SmsURL` responses.
 - [X] **Task P6.5: Unit and Integration Tests for Phase 6 Features**
     - Added comprehensive unit tests for `SmsElement.Execute`, all `SMSService` methods (with DB and gateway mocks), and the inbound SMS API handler.
+
+---
+## Phase 7: Advanced Features, Security Hardening, Scalability & API Expansion
+- **Goal:** Implement administrative APIs, significantly expand user-facing APIs for live control and resource management, refine authentication, conduct security reviews, and define strategies for performance, monitoring, and future architecture.
+- **Status:** Completed
+
+### Tasks:
+- [X] **Task P7.A: Implement Admin APIs for Freeswitch Server and Gateway Management**
+    - Defined DTOs, Service layer (IFreeswitchServerService, IGatewayService, implementations), and API Handlers for CRUD operations on Freeswitch Servers and VoIP Gateways.
+    - Secured admin routes with JWT and a new Admin Role middleware.
+    - Added initial unit tests for new admin components.
+- [X] **Task P7.B: Implement Live Call Control API Endpoints**
+    - Defined DTOs for live call actions (play, say, DTMF, record, hangup).
+    - Extended ICallService and CallService to send ESL commands for these actions.
+    - Implemented API handlers and routes under `/accounts/{account_sid}/calls/{call_sid}/`.
+    - Added initial unit tests for live call control handlers.
+- [X] **Task P7.C: Implement SMS Management API Endpoints**
+    - Defined DTOs for sending and representing SMS messages.
+    - Defined ISMSService and implemented methods in SMSService for API-based sending, listing, and fetching SMS (account-scoped). Added `SMSDirectionOutboundAPI` domain constant.
+    - Implemented AccountSMSHandler and registered API routes.
+    - Added initial unit tests for SMS handlers.
+- [X] **Task P7.D: Implement Recording Management API Endpoints**
+    - Defined DTOs for recording responses.
+    - Created IRecordingService and RecordingService for CRUD on recording metadata.
+    - Implemented RecordingHandler and registered API routes for listing, getting, and deleting recordings.
+    - Added initial unit tests for recording handlers.
+- [X] **Task P7.E: Implement Conference Management API Endpoints**
+    - Defined DTOs for conference and participant responses, and for conference control actions.
+    *   Updated IConferenceService and ConferenceService (added ESL client) for metadata CRUD (account-scoped) and live conference/participant control (play, say, record, mute, kick).
+    - Implemented ConferenceHandler and registered API routes.
+    - Added initial unit tests for conference handlers.
+- [X] **Task P7.F: Refine and Fully Integrate JWT Authentication**
+    - Verified consistent application of JWT middleware.
+    - Confirmed token expiration handling. Documented absence of refresh/revocation.
+    *   Implemented `AuthHandler` for token generation, including logic to assign "admin" role in JWT claims based on a configured list of Admin SIDs (config updated).
+    - Updated API documentation regarding JWT usage.
+- [X] **Task P7.G: Conduct Initial Security Review and Implement Hardening Measures**
+    - Reviewed input validation and logging practices.
+    - Outlined dependency vulnerability check process.
+    - Implemented core logic for IP-based rate limiting (`rate_limiter.go`). (Note: Full integration of rate limiter into server routes and main.go init is pending but core logic is present).
+- [X] **Task P7.H: Define Performance Testing Strategy**
+    - Created `PERFORMANCE_TESTING_STRATEGY.md` (objectives, scope, KPIs, environment, tool recommendations).
+    - Created a sample k6 test script (`sample_k6_test.js`).
+- [X] **Task P7.I: Implement Basic Monitoring and Alerting Setup**
+    - Integrated Prometheus metrics: exposed `/api/metrics`, added HTTP request metrics middleware.
+    - Updated `docker-compose.yml` for Prometheus & Grafana. Created `prometheus.yml`, `grafana_datasources.yml`.
+    - Defined example alert rules in `alert.rules.yml`. Created `MONITORING_SETUP.md`.
+- [X] **Task P7.J: Evaluate Feasibility of Microservice Refactoring (High-Level)**
+    - Created `MICROSERVICE_REFACTORING_EVALUATION.md` analyzing potential microservice candidates and providing recommendations.
+- [X] **Task P7.K: Final Documentation Update for All Phase 7 Features**
+    - Updated `API_DOCUMENTATION.md` with all new user-facing APIs (Live Call Control, SMS, Recording, Conference).
+    - Comprehensively updated `GOLANG_POSTGRES_IMPLEMENTATION_PLAN.md` (technical documentation) to reflect all architectural changes, new services, new APIs, ESL command details, auth updates, and summaries of security, performance, monitoring, and microservice evaluation tasks from Phase 7.
 
 ---
 ## Phase 8: Documentation & Production Readiness
