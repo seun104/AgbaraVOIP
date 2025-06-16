@@ -207,6 +207,160 @@ func ToFreeswitchServerResponseList(servers []*domain.FreeswitchServer) []Freesw
 	return responses
 }
 
+// === Conference Management DTOs ===
+
+// ConferenceResponse represents a conference resource in API responses.
+type ConferenceResponse struct {
+	SID           string                `json:"sid"`
+	AccountSID    string                `json:"account_sid"`
+	FriendlyName  string                `json:"friendly_name"`
+	Status        domain.ConferenceStatus `json:"status"`
+	StartTime     *string               `json:"start_time,omitempty"` // RFC3339 format
+	EndTime       *string               `json:"end_time,omitempty"`   // RFC3339 format
+	CreatedAt     string                `json:"created_at"`           // RFC3339 format
+	UpdatedAt     string                `json:"updated_at"`           // RFC3339 format
+	// ParticipantsLink string             `json:"participants_link,omitempty"` // Link to list participants
+}
+
+// ToConferenceResponse converts a domain.Conference object to a ConferenceResponse DTO.
+func ToConferenceResponse(conf *domain.Conference) ConferenceResponse {
+	var startTime, endTime *string
+	if conf.StartTime != nil && !conf.StartTime.IsZero() {
+		st := conf.StartTime.Format(time.RFC3339)
+		startTime = &st
+	}
+	if conf.EndTime != nil && !conf.EndTime.IsZero() {
+		et := conf.EndTime.Format(time.RFC3339)
+		endTime = &et
+	}
+	return ConferenceResponse{
+		SID:          conf.SID,
+		AccountSID:   conf.AccountSID,
+		FriendlyName: conf.FriendlyName,
+		Status:       conf.Status,
+		StartTime:    startTime,
+		EndTime:      endTime,
+		CreatedAt:    conf.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:    conf.UpdatedAt.Format(time.RFC3339),
+	}
+}
+
+// ToConferenceResponseList converts a slice of domain.Conference objects to a slice of ConferenceResponse DTOs.
+func ToConferenceResponseList(confs []*domain.Conference) []ConferenceResponse {
+	responses := make([]ConferenceResponse, len(confs))
+	for i, conf := range confs {
+		responses[i] = ToConferenceResponse(conf)
+	}
+	return responses
+}
+
+// ParticipantResponse represents a conference participant in API responses.
+type ParticipantResponse struct {
+	SID           string     `json:"sid"`
+	ConferenceSID string     `json:"conference_sid"`
+	CallSID       string     `json:"call_sid"`
+	AccountSID    string     `json:"account_sid"`
+	IsMuted       bool       `json:"is_muted"`
+	IsModerator   bool       `json:"is_moderator"`
+	JoinTime      string     `json:"join_time"`      // RFC3339 format
+	LeaveTime     *string    `json:"leave_time,omitempty"` // RFC3339 format
+}
+
+// ToParticipantResponse converts a domain.ConferenceParticipant object to a ParticipantResponse DTO.
+func ToParticipantResponse(p *domain.ConferenceParticipant) ParticipantResponse {
+	var leaveTime *string
+	if p.LeaveTime != nil && !p.LeaveTime.IsZero() {
+		lt := p.LeaveTime.Format(time.RFC3339)
+		leaveTime = &lt
+	}
+	return ParticipantResponse{
+		SID:           p.SID,
+		ConferenceSID: p.ConferenceSID,
+		CallSID:       p.CallSID,
+		AccountSID:    p.AccountSID,
+		IsMuted:       p.IsMuted,
+		IsModerator:   p.IsModerator,
+		JoinTime:      p.JoinTime.Format(time.RFC3339),
+		LeaveTime:     leaveTime,
+	}
+}
+
+// ToParticipantResponseList converts a slice of domain.ConferenceParticipant objects to a slice of ParticipantResponse DTOs.
+func ToParticipantResponseList(participants []*domain.ConferenceParticipant) []ParticipantResponse {
+	responses := make([]ParticipantResponse, len(participants))
+	for i, p := range participants {
+		responses[i] = ToParticipantResponse(p)
+	}
+	return responses
+}
+
+// ConferenceControlPlayRequest defines the request for playing audio in a conference.
+// (Identical to CallPlayRequest, can be aliased or duplicated for clarity in Swagger docs)
+type ConferenceControlPlayRequest CallPlayRequest
+
+// ConferenceControlSayRequest defines the request for speaking text in a conference.
+// (Identical to CallSayRequest)
+type ConferenceControlSayRequest CallSayRequest
+
+// ConferenceControlRecordRequest defines the request for recording a conference.
+// (Similar to CallRecordRequest, action might be specific like 'start', 'stop', 'pause', 'resume')
+// For now, using the same CallRecordRequest structure.
+type ConferenceControlRecordRequest CallRecordRequest
+
+
+// ParticipantMuteRequest defines the request to mute/unmute a participant.
+type ParticipantMuteRequest struct {
+	Mute *bool `json:"mute" binding:"required"` // Pointer to distinguish false from not set
+}
+
+// ParticipantKickRequest (No body needed, just action via URL)
+
+// Note: CallActionResponse can be reused for conference control actions.
+// type ConferenceActionResponse CallActionResponse
+
+// === Recording Management DTOs ===
+
+// RecordingResponse represents a recording resource in API responses.
+type RecordingResponse struct {
+	SID              string    `json:"sid"`
+	AccountSID       string    `json:"account_sid"`
+	CallSID          *string   `json:"call_sid,omitempty"`
+	ConferenceSID    *string   `json:"conference_sid,omitempty"`
+	DurationSeconds  uint32    `json:"duration_seconds"`
+	FilePath         string    `json:"file_path"` // Consider if this should be a downloadable URL or an internal path
+	Format           string    `json:"format"`
+	SizeBytes        int64     `json:"size_bytes"`
+	CreatedAt        string    `json:"created_at"` // RFC3339 format
+	UpdatedAt        string    `json:"updated_at"` // RFC3339 format
+	// Status        *string   `json:"status,omitempty"` // If status field is added to domain.Recording
+}
+
+// ToRecordingResponse converts a domain.Recording object to a RecordingResponse DTO.
+func ToRecordingResponse(rec *domain.Recording) RecordingResponse {
+	return RecordingResponse{
+		SID:              rec.SID,
+		AccountSID:       rec.AccountSID,
+		CallSID:          rec.CallSID,
+		ConferenceSID:    rec.ConferenceSID,
+		DurationSeconds:  rec.DurationSeconds,
+		FilePath:         rec.FilePath, // Security: Ensure this path is safe to expose or transform to a secure URL
+		Format:           rec.Format,
+		SizeBytes:        rec.SizeBytes,
+		CreatedAt:        rec.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:        rec.UpdatedAt.Format(time.RFC3339),
+		// Status:        rec.Status // If status field is added
+	}
+}
+
+// ToRecordingResponseList converts a slice of domain.Recording objects to a slice of RecordingResponse DTOs.
+func ToRecordingResponseList(recs []*domain.Recording) []RecordingResponse {
+	responses := make([]RecordingResponse, len(recs))
+	for i, rec := range recs {
+		responses[i] = ToRecordingResponse(rec)
+	}
+	return responses
+}
+
 // === SMS Management DTOs ===
 
 // SendSMSRequest defines the request for sending an SMS message.

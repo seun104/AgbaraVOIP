@@ -92,3 +92,56 @@ type ISMSService interface {
 type SMSGatewayClient interface {
     SendSMS(ctx context.Context, to, from, body string, statusCallbackURL string) (gatewayMessageID string, err error)
 }
+
+// IRecordingService defines the interface for managing recording metadata.
+type IRecordingService interface {
+	GetRecordingBySID(ctx context.Context, accountSid string, recordingSid string) (*domain.Recording, error)
+	ListRecordings(ctx context.Context, accountSid string, filters map[string]interface{}) ([]*domain.Recording, error)
+	DeleteRecording(ctx context.Context, accountSid string, recordingSid string) error // Deletes metadata
+
+	// CreateRecording is currently part of CallServicerForESL (implemented by CallService)
+	// and is used during call processing. If needed for other contexts, it could be added here
+	// or CallServicerForESL could be embedded if a RecordingService needs to call it.
+	// For now, assuming creation happens within call context.
+}
+
+// IConferenceService defines the interface for managing conference metadata and live control.
+type IConferenceService interface {
+	// Metadata methods (ensure account scoping)
+	ListConferences(ctx context.Context, accountSid string, filters map[string]interface{}) ([]*domain.Conference, error)
+	GetConferenceBySID(ctx context.Context, accountSid string, confSid string) (*domain.Conference, error)
+	// GetConferenceByName is more for internal use by AgbaraXML <Conference> element, may not need accountSid if name is unique per account already.
+	// GetConferenceByName(ctx context.Context, accountSid, name string) (*domain.Conference, error)
+	GetOrCreateConference(ctx context.Context, accountSid, name string) (*domain.Conference, error) // Used by XML, ensure account safety
+
+	ListParticipants(ctx context.Context, accountSid string, confSid string) ([]*domain.ConferenceParticipant, error)
+	GetParticipant(ctx context.Context, accountSid string, confSid string, participantSid string) (*domain.ConferenceParticipant, error)
+    // GetParticipantByCallSID is useful internally and for events.
+    GetParticipantByCallSID(ctx context.Context, callSid string) (*domain.ConferenceParticipant, error)
+
+
+	// Status updates (ensure account scoping if called from an API context)
+	UpdateConferenceStatus(ctx context.Context, accountSid string, confSid string, status domain.ConferenceStatus) error
+	EndConference(ctx context.Context, accountSid string, confSid string, endTime time.Time) error
+
+	// Participant metadata updates (ensure account scoping)
+    // AddParticipant is more for ESL event handling based on call joining a conference.
+	// AddParticipant(ctx context.Context, accountSid string, confSid string, callSid string, pSid string, isMuted bool, isModerator bool) (*domain.ConferenceParticipant, error)
+	UpdateParticipantMuteStatus(ctx context.Context, accountSid string, confSid string, pSid string, isMuted bool) error // pSid is ConferenceParticipant SID
+	UpdateParticipantModeratorStatus(ctx context.Context, accountSid string, confSid string, pSid string, isModerator bool) error
+	RemoveParticipant(ctx context.Context, accountSid string, confSid string, pSid string, leaveTime time.Time) error
+
+
+	// Live Conference Control methods (via ESL)
+	PlayAudioInConference(ctx context.Context, accountSid string, confSid string, playURL string, loop int) (jobID string, err error)
+	SayTextInConference(ctx context.Context, accountSid string, confSid string, text string, language *string, voice *string) (jobID string, err error)
+	StartRecordingConference(ctx context.Context, accountSid string, confSid string, fileName *string, maxDurationSec *int, format *string, playBeep *bool) (recordingName string, jobID string, err error)
+	StopRecordingConference(ctx context.Context, accountSid string, confSid string, recordingNameOrUUID string) (jobID string, err error)
+
+	// Live Participant Control methods (via ESL)
+    // These typically use member ID (Freeswitch concept, often CallSID of participant) or 'all'.
+	MuteParticipantInConference(ctx context.Context, accountSid string, confSid string, participantCallSidOrMemberID string, mute bool) (jobID string, err error)
+	KickParticipantFromConference(ctx context.Context, accountSid string, confSid string, participantCallSidOrMemberID string) (jobID string, err error)
+    // AddParticipantToConference (Dial-out to conference - involves call origination then transfer to conference)
+    // AddParticipantToConference(ctx context.Context, accountSid, confSid, to, fromNum, callerName string, timeout int) (*domain.Call, error)
+}

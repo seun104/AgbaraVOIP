@@ -25,8 +25,9 @@ type Server struct {
 	applicationService services.IApplicationService
 	callService        services.CallServicerForESL // Use the composite interface
 	xmlProcessor       *callcontrol.XMLProcessor
-	freeswitchService services.IFreeswitchServerService // New
-	gatewayService    services.IGatewayService       // New
+	freeswitchService services.IFreeswitchServerService
+	gatewayService    services.IGatewayService
+	recordingService  services.IRecordingService // <-- New
 }
 
 func NewServer(
@@ -38,7 +39,8 @@ func NewServer(
 	xmlProcessor *callcontrol.XMLProcessor,
 	freeswitchService services.IFreeswitchServerService,
 	gatewayService services.IGatewayService,
-	processedAdminSIDs []string, // <-- New parameter
+	recordingService services.IRecordingService, // <-- New
+	processedAdminSIDs []string,
 ) *Server {
 	if cfg.LogLevel != "debug" {
 		gin.SetMode(gin.ReleaseMode)
@@ -74,8 +76,9 @@ func NewServer(
 		applicationService: applicationService,
 		callService:        callService, // Store composite service
 		xmlProcessor:       xmlProcessor,
-		freeswitchService: freeswitchService, // New
-		gatewayService:    gatewayService,    // New
+		freeswitchService: freeswitchService,
+		gatewayService:    gatewayService,
+		recordingService:  recordingService, // <-- New
 	}
 	srv.setupRoutes()
 	return srv
@@ -165,6 +168,15 @@ func (s *Server) setupRoutes() {
 			smsMessagesRoutes.POST("", accountSMSHandler.SendSMS)
 			smsMessagesRoutes.GET("", accountSMSHandler.ListSMSMessages)
 			smsMessagesRoutes.GET("/:sms_sid", accountSMSHandler.GetSMSMessage)
+		}
+
+		// Recording Management under an account
+		recordingHandler := NewRecordingHandler(s.recordingService, s.logger)
+		recordingsRoutes := authenticatedAccountRoutes.Group("/recordings")
+		{
+			recordingsRoutes.GET("", recordingHandler.ListRecordings)
+			recordingsRoutes.GET("/:recording_sid", recordingHandler.GetRecording)
+			recordingsRoutes.DELETE("/:recording_sid", recordingHandler.DeleteRecording)
 		}
 	}
 

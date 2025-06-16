@@ -52,8 +52,9 @@ func main() {
 	// Initialize new admin services
 	freeswitchService := services.NewFreeswitchServerService(dbConn, appLogger)
 	gatewayService := services.NewGatewayService(dbConn, appLogger)
+	recordingService := services.NewRecordingService(dbConn, appLogger) // Initialize RecordingService
 
-	apiServer := api.NewServer(cfg, appLogger, accountService, applicationService, callService, xmlProcessor, freeswitchService, gatewayService, finalAdminSIDs)
+	apiServer := api.NewServer(cfg, appLogger, accountService, applicationService, callService, xmlProcessor, freeswitchService, gatewayService, recordingService, finalAdminSIDs)
 	go func() { if err := apiServer.Start(); err != nil && err != http.ErrServerClosed { appLogger.Fatalf("HTTP server error: %v", err) } }()
 	eslOutboundServer, err := esl.NewFSOutboundServer(cfg, appLogger, callService, xmlProcessor) // Corrected: Pass callService
 	if err != nil { appLogger.Warnf("Failed Outbound ESL: %v.", err) } else { appLogger.Info("Outbound ESL Server initialized.") }
