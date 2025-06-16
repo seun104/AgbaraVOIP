@@ -2,8 +2,17 @@ package config
 
 import (
 	"strings"
+	"time" // Added import
+
 	"github.com/spf13/viper"
 )
+
+// AuthConfig stores authentication related configuration.
+type AuthConfig struct {
+	JWTSecret        string        `mapstructure:"JWT_SECRET"`
+	JWTTokenDuration time.Duration `mapstructure:"JWT_TOKEN_DURATION"`
+	AdminSIDs        []string      `mapstructure:"ADMIN_SIDS"` // Comma-separated string in env/config file
+}
 
 // FreeswitchConfig stores Freeswitch connection details.
 type FreeswitchConfig struct {
@@ -27,6 +36,7 @@ type Config struct {
 	DBSchema   string `mapstructure:"DB_SCHEMA"` // e.g. "public"
 
 	Freeswitch FreeswitchConfig `mapstructure:",squash"` // Embed FreeswitchConfig
+	Auth       AuthConfig     `mapstructure:"auth"`    // Added AuthConfig
 }
 
 // LoadConfig reads configuration from file or environment variables.
@@ -53,6 +63,11 @@ func LoadConfig(path string) (config Config, err error) {
 	viper.SetDefault("FS_PORT", "8021")
 	viper.SetDefault("FS_PASSWORD", "ClueCon")
 	viper.SetDefault("FS_OUTBOUND_LISTEN_ADDRESS", ":8084") // Default port for ESL Outbound Server
+
+	// Auth Config Defaults
+	viper.SetDefault("AUTH.JWT_SECRET", "your-very-secret-jwt-key-here-please-change-me")
+	viper.SetDefault("AUTH.JWT_TOKEN_DURATION", "1h")
+	viper.SetDefault("AUTH.ADMIN_SIDS", "") // Expects comma-separated string like "ACadmin1,ACadmin2" from env or single string from yaml if not a list.
 
 
 	err = viper.ReadInConfig()

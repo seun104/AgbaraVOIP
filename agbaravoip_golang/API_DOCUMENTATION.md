@@ -6,12 +6,53 @@ Welcome to the AgbaraVOIP GoLang API. This API allows you to manage your voice a
 
 ### Authentication
 
-Most API endpoints require authentication. The API uses HTTP Basic Authentication. You will need to provide your Account SID as the username and your Auth Token as the password.
+Most API endpoints require authentication using a JSON Web Token (JWT). To obtain a JWT, you must first authenticate against the `/api/v1/auth/token` endpoint using HTTP Basic Authentication (your Account SID as the username and your Auth Token as the password). This will return a JWT Bearer token.
 
-Example: `Authorization: Basic <base64_encoded_credentials>`
-Where `<base64_encoded_credentials>` is `AccountSID:AuthToken` encoded in Base64.
+Once you have the JWT, include it in the `Authorization` header for all subsequent protected API requests:
 
-Endpoints that are publicly accessible (e.g., creating a master account) will be explicitly noted.
+`Authorization: Bearer <your_jwt_token>`
+
+Endpoints that are publicly accessible (e.g., creating a master account via `POST /api/v1/accounts` or the token generation endpoint itself) or use different authentication schemes (like webhooks) will be explicitly noted.
+
+#### Token Expiration and Management
+*   **Expiration:** JWTs have a limited lifetime (e.g., as specified by the `jwt_token_duration` configuration, typically 15 minutes to a few hours). If your token expires, the API will return a `401 Unauthorized` error. You will need to re-authenticate at the `/api/v1/auth/token` endpoint to obtain a new token.
+*   **Refresh Tokens:** Refresh tokens are not currently implemented. You must re-authenticate with your credentials when your access token expires.
+*   **Token Revocation:** Active server-side revocation of tokens (before their natural expiry) is not currently supported. For security, ensure tokens are kept confidential and token expiry times are reasonably short.
+
+### Obtain an API Token
+
+*   **POST** `/auth/token`
+*   **Description:** Authenticates your account credentials (via HTTP Basic Auth) and returns a JWT Bearer token for use with other API endpoints.
+*   **Authentication:** HTTP Basic Authentication (Account SID and Auth Token).
+*   **Request Body:** None.
+*   **Responses:**
+    *   `200 OK`:
+        ```json
+        {
+            "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+            "expires_at": "2023-10-28T12:15:00Z",
+            "token_type": "Bearer"
+        }
+        ```
+    *   `400 Bad Request` (e.g., missing Authorization header):
+        ```json
+        {
+            "error": "Authorization header required"
+        }
+        ```
+    *   `401 Unauthorized` (Invalid credentials):
+        ```json
+        {
+            "error": "Invalid credentials"
+        }
+        ```
+    *   `500 Internal Server Error`:
+        ```json
+        {
+            "error": "Token generation failed",
+            "details": "An internal error occurred."
+        }
+        ```
 
 ### API Versioning
 
@@ -74,8 +115,7 @@ The Account resource represents a user or entity that can own applications, numb
 
 *   **GET** `/accounts/{account_sid}`
 *   **Description:** Retrieves the details of a specific account.
-*   **Authentication:** Basic Auth (Account SID and Auth Token)
-    *   Note: You can only retrieve details for the account associated with the provided credentials.
+*   **Authentication:** JWT Bearer Token
 *   **Path Parameters:**
     *   `account_sid` (string, required): The SID of the account to retrieve (must match authenticated account).
 *   **Responses:**
@@ -123,7 +163,7 @@ The Account resource represents a user or entity that can own applications, numb
 
 *   **POST** `/accounts/{account_sid}/subaccounts`
 *   **Description:** Creates a new subaccount under the authenticated master account.
-*   **Authentication:** Basic Auth (Master Account SID and Auth Token)
+*   **Authentication:** JWT Bearer Token
 *   **Path Parameters:**
     *   `account_sid` (string, required): The SID of the master account under which the subaccount will be created. Must match the authenticated account.
 *   **Request Body:** `application/json` (using `CreateAccountRequest` DTO)
@@ -182,7 +222,7 @@ The Account resource represents a user or entity that can own applications, numb
 
 *   **GET** `/accounts/{account_sid}/subaccounts`
 *   **Description:** Retrieves a list of all subaccounts belonging to the authenticated master account.
-*   **Authentication:** Basic Auth (Master Account SID and Auth Token)
+*   **Authentication:** JWT Bearer Token
 *   **Path Parameters:**
     *   `account_sid` (string, required): The SID of the master account whose subaccounts are to be listed. Must match the authenticated account.
 *   **Responses:**
@@ -242,7 +282,7 @@ Applications define how AgbaraVOIP handles incoming calls or messages for your n
 
 *   **POST** `/accounts/{account_sid}/applications`
 *   **Description:** Creates a new voice/SMS application under the authenticated account.
-*   **Authentication:** Basic Auth (Account SID and Auth Token)
+*   **Authentication:** JWT Bearer Token
 *   **Path Parameters:**
     *   `account_sid` (string, required): The SID of the account that will own this application. Must match the authenticated account.
 *   **Request Body:** `application/json`
@@ -318,7 +358,7 @@ Applications define how AgbaraVOIP handles incoming calls or messages for your n
 
 *   **GET** `/accounts/{account_sid}/applications/{app_sid}`
 *   **Description:** Retrieves details for a specific application owned by the authenticated account.
-*   **Authentication:** Basic Auth (Account SID and Auth Token)
+*   **Authentication:** JWT Bearer Token
 *   **Path Parameters:**
     *   `account_sid` (string, required): The SID of the account.
     *   `app_sid` (string, required): The SID of the application to retrieve.
@@ -348,7 +388,7 @@ Applications define how AgbaraVOIP handles incoming calls or messages for your n
 
 *   **GET** `/accounts/{account_sid}/applications`
 *   **Description:** Retrieves all applications owned by the authenticated account.
-*   **Authentication:** Basic Auth (Account SID and Auth Token)
+*   **Authentication:** JWT Bearer Token
 *   **Path Parameters:**
     *   `account_sid` (string, required): The SID of the account.
 *   **Responses:**
@@ -393,7 +433,7 @@ Applications define how AgbaraVOIP handles incoming calls or messages for your n
 
 *   **PUT** `/accounts/{account_sid}/applications/{app_sid}`
 *   **Description:** Updates details for a specific application. Allows partial updates.
-*   **Authentication:** Basic Auth (Account SID and Auth Token)
+*   **Authentication:** JWT Bearer Token
 *   **Path Parameters:**
     *   `account_sid` (string, required): The SID of the account.
     *   `app_sid` (string, required): The SID of the application to update.
@@ -438,7 +478,7 @@ Applications define how AgbaraVOIP handles incoming calls or messages for your n
 
 *   **DELETE** `/accounts/{account_sid}/applications/{app_sid}`
 *   **Description:** Deletes a specific application.
-*   **Authentication:** Basic Auth (Account SID and Auth Token)
+*   **Authentication:** JWT Bearer Token
 *   **Path Parameters:**
     *   `account_sid` (string, required): The SID of the account.
     *   `app_sid` (string, required): The SID of the application to delete.
@@ -474,7 +514,7 @@ The Call resource represents a voice call connection.
 
 *   **POST** `/accounts/{account_sid}/calls`
 *   **Description:** Initiates an outbound call from a number associated with your account to a destination number. Call control logic is typically fetched from an `answer_url` or an `application_sid`.
-*   **Authentication:** Basic Auth (Account SID and Auth Token)
+*   **Authentication:** JWT Bearer Token
 *   **Path Parameters:**
     *   `account_sid` (string, required): The SID of the account making the call.
 *   **Request Body:** `application/json`
@@ -548,7 +588,7 @@ The Call resource represents a voice call connection.
 
 *   **GET** `/accounts/{account_sid}/calls/{call_sid}`
 *   **Description:** Retrieves details for a specific call.
-*   **Authentication:** Basic Auth (Account SID and Auth Token)
+*   **Authentication:** JWT Bearer Token
 *   **Path Parameters:**
     *   `account_sid` (string, required): The SID of the account.
     *   `call_sid` (string, required): The SID of the call to retrieve.
@@ -578,7 +618,7 @@ The Call resource represents a voice call connection.
 
 *   **GET** `/accounts/{account_sid}/calls`
 *   **Description:** Retrieves a list of calls associated with the account. Supports filtering.
-*   **Authentication:** Basic Auth (Account SID and Auth Token)
+*   **Authentication:** JWT Bearer Token
 *   **Path Parameters:**
     *   `account_sid` (string, required): The SID of the account.
 *   **Query Parameters (Optional):**

@@ -35,8 +35,9 @@ func NewServer(
 	applicationService services.IApplicationService,
 	callService services.CallServicerForESL, // Use the composite interface
 	xmlProcessor *callcontrol.XMLProcessor,
-	freeswitchService services.IFreeswitchServerService, // New
-	gatewayService services.IGatewayService,       // New
+	freeswitchService services.IFreeswitchServerService,
+	gatewayService services.IGatewayService,
+	processedAdminSIDs []string, // <-- New parameter
 ) *Server {
 	if cfg.LogLevel != "debug" {
 		gin.SetMode(gin.ReleaseMode)
@@ -91,7 +92,7 @@ func (s *Server) setupRoutes() {
 
 	// --- Auth Handler for Token Generation (Public) ---
 	// AuthHandler needs CallServicerForESL which includes ValidateCredentials
-	authH := NewAuthHandler(s.callService, s.logger, s.config.Auth.JWTSecret, s.config.Auth.JWTTokenDuration)
+	authH := NewAuthHandler(s.callService, s.logger, s.config.Auth.JWTSecret, s.config.Auth.JWTTokenDuration, processedAdminSIDs)
 	baseRouter.POST("/auth/token", authH.GenerateTokenHandler)
 
 	// --- Account Handler (Master Account Creation - potentially public or admin only) ---
