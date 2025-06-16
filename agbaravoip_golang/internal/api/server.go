@@ -24,6 +24,8 @@ type Server struct {
 	applicationService services.IApplicationService
 	callService        services.CallServicerForESL // Use the composite interface
 	xmlProcessor       *callcontrol.XMLProcessor
+	freeswitchService services.IFreeswitchServerService // New
+	gatewayService    services.IGatewayService       // New
 }
 
 func NewServer(
@@ -33,6 +35,8 @@ func NewServer(
 	applicationService services.IApplicationService,
 	callService services.CallServicerForESL, // Use the composite interface
 	xmlProcessor *callcontrol.XMLProcessor,
+	freeswitchService services.IFreeswitchServerService, // New
+	gatewayService services.IGatewayService,       // New
 ) *Server {
 	if cfg.LogLevel != "debug" {
 		gin.SetMode(gin.ReleaseMode)
@@ -68,6 +72,8 @@ func NewServer(
 		applicationService: applicationService,
 		callService:        callService, // Store composite service
 		xmlProcessor:       xmlProcessor,
+		freeswitchService: freeswitchService, // New
+		gatewayService:    gatewayService,    // New
 	}
 	srv.setupRoutes()
 	return srv
@@ -144,6 +150,35 @@ func (s *Server) setupRoutes() {
 	smsH := NewSMSHandler(s.callService, s.xmlProcessor, s.logger)
 	baseRouter.POST("/sms/inbound", smsH.InboundSMSEntrypoint)
 
+	// --- Admin Routes ---
+	// Protected by JWT and Admin Role check
+	adminRouterGroup := baseRouter.Group("/admin")
+	adminRouterGroup.Use(jwtAuthMW) // First, ensure user is authenticated via JWT
+	adminRouterGroup.Use(AdminRoleAuthMiddleware(mwLogger)) // Then, ensure user has 'admin' role
+
+	{
+		// Freeswitch Server Admin Routes
+		fsAdminHandler := NewAdminFreeswitchHandler(s.freeswitchService, s.logger)
+		fsRoutes := adminRouterGroup.Group("/freeswitch-servers")
+		{
+			fsRoutes.POST("", fsAdminHandler.CreateFreeswitchServer)
+			fsRoutes.GET("", fsAdminHandler.ListFreeswitchServers)
+			fsRoutes.GET("/:fs_sid", fsAdminHandler.GetFreeswitchServer)
+			fsRoutes.PUT("/:fs_sid", fsAdminHandler.UpdateFreeswitchServer)
+			fsRoutes.DELETE("/:fs_sid", fsAdminHandler.DeleteFreeswitchServer)
+		}
+
+		// Gateway Admin Routes
+		gwAdminHandler := NewAdminGatewayHandler(s.gatewayService, s.logger)
+		gwRoutes := adminRouterGroup.Group("/gateways")
+		{
+			gwRoutes.POST("", gwAdminHandler.CreateGateway)
+			gwRoutes.GET("", gwAdminHandler.ListGateways)
+			gwRoutes.GET("/:gw_sid", gwAdminHandler.GetGateway)
+			gwRoutes.PUT("/:gw_sid", gwAdminHandler.UpdateGateway)
+			gwRoutes.DELETE("/:gw_sid", gwAdminHandler.DeleteGateway)
+		}
+	}
 
 	s.log.Info("Server routes setup complete.")
 }

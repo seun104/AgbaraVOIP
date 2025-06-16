@@ -147,6 +147,44 @@ func JWTMiddleware(logger *logrus.Entry) gin.HandlerFunc {
 	}
 }
 
+// AdminRoleAuthMiddleware ensures that the JWT token contains an 'admin' role.
+// It should be placed AFTER JWTMiddleware in the middleware chain.
+func AdminRoleAuthMiddleware(logger *logrus.Entry) gin.HandlerFunc {
+	var log *logrus.Entry
+	if logger != nil {
+		log = logger.WithField("middleware", "admin_role_auth")
+	} else {
+		defaultLogger := logrus.New()
+		log = logrus.NewEntry(defaultLogger).WithField("middleware", "admin_role_auth")
+		log.Warn("AdminRoleAuthMiddleware initialized with no logger provided, using default logrus instance.")
+	}
+
+	return func(c *gin.Context) {
+		userRoleVal, exists := c.Get(string(ContextKeyUserRole))
+		if !exists {
+			log.Error("AdminRoleAuthMiddleware: UserRole not found in JWT claims (JWTMiddleware should run first and set this)")
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "Access forbidden: missing role claims"})
+			return
+		}
+
+		userRole, ok := userRoleVal.(string)
+		if !ok || userRole == "" {
+			log.Error("AdminRoleAuthMiddleware: UserRole in token is invalid or empty")
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "Access forbidden: invalid role claims"})
+			return
+		}
+
+		if strings.ToLower(userRole) != "admin" {
+			log.Warnf("Forbidden access attempt: User with role '%s' tried to access admin-only route '%s'", userRole, c.Request.URL.Path)
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "Access forbidden: admin role required."})
+			return
+		}
+
+		log.Debugf("AdminRoleAuthMiddleware: Access granted for admin user to path '%s'", c.Request.URL.Path)
+		c.Next()
+	}
+}
+
 
 // BasicAuthMiddleware creates a middleware for HTTP Basic Authentication.
 func BasicAuthMiddleware(accountService services.IAccountService, logger *logrus.Logger) gin.HandlerFunc {

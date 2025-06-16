@@ -159,4 +159,116 @@ type GenericErrorResponse struct {
 	Details string `json:"details,omitempty"`
 }
 
+// === FreeswitchServer DTOs ===
+
+type CreateFreeswitchServerRequest struct {
+	Host            string `json:"host" binding:"required"`
+	Port            int    `json:"port" binding:"required,gte=1,lte=65535"`
+	Password        string `json:"password" binding:"required"` // Will not be stored in plain text
+	OutboundAddress string `json:"outbound_address"`
+	IsActive        *bool  `json:"is_active"` // Pointer to allow explicit true/false, defaults to true if omitted by service
+}
+
+type UpdateFreeswitchServerRequest struct {
+	Host            *string `json:"host,omitempty"`
+	Port            *int    `json:"port,omitempty,gte=1,lte=65535"`
+	Password        *string `json:"password,omitempty"` // For updating password
+	OutboundAddress *string `json:"outbound_address,omitempty"`
+	IsActive        *bool   `json:"is_active,omitempty"`
+}
+
+type FreeswitchServerResponse struct {
+	SID             string `json:"sid"`
+	Host            string `json:"host"`
+	Port            int    `json:"port"`
+	OutboundAddress string `json:"outbound_address,omitempty"`
+	IsActive        bool   `json:"is_active"`
+	CreatedAt       string `json:"created_at"`
+	UpdatedAt       string `json:"updated_at"`
+}
+
+func ToFreeswitchServerResponse(fs *domain.FreeswitchServer) FreeswitchServerResponse {
+	return FreeswitchServerResponse{
+		SID:             fs.SID,
+		Host:            fs.Host,
+		Port:            fs.Port,
+		OutboundAddress: fs.OutboundAddress,
+		IsActive:        fs.IsActive,
+		CreatedAt:       fs.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:       fs.UpdatedAt.Format(time.RFC3339),
+	}
+}
+
+func ToFreeswitchServerResponseList(servers []*domain.FreeswitchServer) []FreeswitchServerResponse {
+	responses := make([]FreeswitchServerResponse, len(servers))
+	for i, srv := range servers {
+		responses[i] = ToFreeswitchServerResponse(srv)
+	}
+	return responses
+}
+
+// === Gateway DTOs ===
+
+type CreateGatewayRequest struct {
+	AccountSID          string                `json:"account_sid" binding:"required"` // Assuming admin specifies which account it's for
+	FreeswitchServerSID *string               `json:"freeswitch_server_sid,omitempty"`
+	FriendlyName        string                `json:"friendly_name" binding:"required"`
+	GatewayString       string                `json:"gateway_string" binding:"required"`
+	Codecs              []string              `json:"codecs,omitempty"`
+	RetryCount          *int                  `json:"retry_count,omitempty,gte=0"`    // Pointer for optional with default
+	TimeoutSeconds      *int                  `json:"timeout_seconds,omitempty,gte=1"` // Pointer for optional with default
+	Routes              domain.GatewayRoutes  `json:"routes,omitempty"`
+	IsEnabled           *bool                 `json:"is_enabled,omitempty"` // Pointer for optional with default
+}
+
+type UpdateGatewayRequest struct {
+	FreeswitchServerSID *string               `json:"freeswitch_server_sid,omitempty"`
+	FriendlyName        *string               `json:"friendly_name,omitempty"`
+	GatewayString       *string               `json:"gateway_string,omitempty"`
+	Codecs              []string              `json:"codecs,omitempty"` // Send full list for update, or handle partial
+	RetryCount          *int                  `json:"retry_count,omitempty,gte=0"`
+	TimeoutSeconds      *int                  `json:"timeout_seconds,omitempty,gte=1"`
+	Routes              *domain.GatewayRoutes `json:"routes,omitempty"`
+	IsEnabled           *bool                 `json:"is_enabled,omitempty"`
+}
+
+type GatewayResponse struct {
+	SID                 string                `json:"sid"`
+	AccountSID          string                `json:"account_sid"`
+	FreeswitchServerSID *string               `json:"freeswitch_server_sid,omitempty"`
+	FriendlyName        string                `json:"friendly_name"`
+	GatewayString       string                `json:"gateway_string"`
+	Codecs              []string              `json:"codecs,omitempty"`
+	RetryCount          int                   `json:"retry_count"`
+	TimeoutSeconds      int                   `json:"timeout_seconds"`
+	Routes              domain.GatewayRoutes  `json:"routes,omitempty"`
+	IsEnabled           bool                  `json:"is_enabled"`
+	CreatedAt           string                `json:"created_at"`
+	UpdatedAt           string                `json:"updated_at"`
+}
+
+func ToGatewayResponse(gw *domain.Gateway) GatewayResponse {
+	return GatewayResponse{
+		SID:                 gw.SID,
+		AccountSID:          gw.AccountSID,
+		FreeswitchServerSID: gw.FreeswitchServerSID,
+		FriendlyName:        gw.FriendlyName,
+		GatewayString:       gw.GatewayString,
+		Codecs:              gw.Codecs,
+		RetryCount:          gw.RetryCount,
+		TimeoutSeconds:      gw.TimeoutSeconds,
+		Routes:              gw.Routes,
+		IsEnabled:           gw.IsEnabled,
+		CreatedAt:           gw.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:           gw.UpdatedAt.Format(time.RFC3339),
+	}
+}
+
+func ToGatewayResponseList(gateways []*domain.Gateway) []GatewayResponse {
+	responses := make([]GatewayResponse, len(gateways))
+	for i, gw := range gateways {
+		responses[i] = ToGatewayResponse(gw)
+	}
+	return responses
+}
 

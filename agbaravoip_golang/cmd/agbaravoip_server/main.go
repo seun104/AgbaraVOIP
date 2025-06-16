@@ -23,10 +23,15 @@ func main() {
 	accountService := services.NewAccountService(dbConn, appLogger)
 	applicationService := services.NewApplicationService(dbConn, appLogger)
 	configProvider := AppConfigProvider{cfg: cfg}
-	callService := services.NewCallService(dbConn, eslInboundClient, applicationService, configProvider, appLogger)
-	apiServer := api.NewServer(cfg, appLogger, accountService, applicationService, callService, xmlProcessor)
+	callService := services.NewCallService(dbConn, eslInboundClient, applicationService, accountService, configProvider, appLogger) // Corrected: Added accountService
+
+	// Initialize new admin services
+	freeswitchService := services.NewFreeswitchServerService(dbConn, appLogger)
+	gatewayService := services.NewGatewayService(dbConn, appLogger)
+
+	apiServer := api.NewServer(cfg, appLogger, accountService, applicationService, callService, xmlProcessor, freeswitchService, gatewayService)
 	go func() { if err := apiServer.Start(); err != nil && err != http.ErrServerClosed { appLogger.Fatalf("HTTP server error: %v", err) } }()
-	eslOutboundServer, err := esl.NewFSOutboundServer(cfg, appLogger, xmlProcessor /*, callService - removed */) // Pass xmlProcessor
+	eslOutboundServer, err := esl.NewFSOutboundServer(cfg, appLogger, callService, xmlProcessor) // Corrected: Pass callService
 	if err != nil { appLogger.Warnf("Failed Outbound ESL: %v.", err) } else { appLogger.Info("Outbound ESL Server initialized.") }
 	shutdown := make(chan os.Signal, 1); signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
 	var wg sync.WaitGroup
