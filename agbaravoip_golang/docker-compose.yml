@@ -71,9 +71,49 @@ services:
       - NET_RAW
     # privileged: true # Alternatively, but less secure
 
+  prometheus:
+    image: prom/prometheus:v2.47.0 # Or latest stable
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      # Optional: for persistent data
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle' # Allows hot reloading of config via POST /-/reload
+    depends_on:
+      - app # Assuming your Go app service is named 'app'
+    networks:
+      - agbaravoip_network # Assuming a common network
+
+  grafana:
+    image: grafana/grafana-oss:9.5.3 # Or latest stable
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      # Optional: for persistent data and custom dashboards/datasources
+      - grafana_data:/var/lib/grafana
+      - ./grafana_datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=grafana # Change in production!
+      - GF_DATASOURCES_PATH=/etc/grafana/provisioning/datasources
+    depends_on:
+      - prometheus
+    networks:
+      - agbaravoip_network
+
 volumes:
   postgres_data:
   freeswitch_data:
+  prometheus_data: # Added for optional persistence
+  grafana_data:    # Added for optional persistence
 
 networks:
   agbaravoip_network:

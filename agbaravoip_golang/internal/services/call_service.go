@@ -16,7 +16,8 @@ type FreeswitchOutboundConfigProvider interface { GetESLOutboundServerListenAddr
 // Errors for CallService
 var ( ErrCallNotFound_CS = errors.New("call not found"); ErrCallValidationFailed_CS = errors.New("call validation failed");
 	ErrCallCreationFailed_CS = errors.New("call creation failed in DB"); ErrESLClientNotAvailable_CS = errors.New("ESL client unavailable");
-	ErrESLCommandFailed_CS = errors.New("ESL command failed"); ErrAppLogicError_CS = errors.New("app logic error for call"); )
+	ErrESLCommandFailed_CS = errors.New("ESL command failed"); ErrAppLogicError_CS = errors.New("app logic error for call");
+	ErrCallInvalidState_CS = errors.New("call is not in a state that allows this operation"); )
 
 type CallService struct {
 	db *gorm.DB; eslClient *esl.FSInboundClient; appService IApplicationService; accountService IAccountService;
@@ -240,4 +241,267 @@ func (s *CallService) GetAccountBySID(ctx context.Context, sid string) (*domain.
 	}
 	// Assuming IAccountService.GetAccountBySID does not take context. If it does, pass ctx.
 	return s.accountService.GetAccountBySID(sid)
+}
+
+// --- Live Call Control Methods ---
+
+func (s *CallService) PlayAudioOnCall(ctx context.Context, accountSid, callSid string, playURL string, loop int, legs string) (string, error) {
+	s.logger.Infof("Attempting to play audio on call %s for account %s. URL: %s, Legs: %s", callSid, accountSid, playURL, legs)
+	call, err := s.GetCallBySID(accountSid, callSid)
+	if err != nil {
+		return "", err // Handles ErrCallNotFound_CS
+	}
+	if call.Status != domain.CallStatusInProgress {
+		return "", fmt.Errorf("%w: call SID %s is in status %s", ErrCallInvalidState_CS, callSid, call.Status)
+	}
+	if s.eslClient == nil {
+		return "", ErrESLClientNotAvailable_CS
+	}
+
+	// Default legs to "aleg" if empty
+	legParam := "aleg"
+	if legs == "bleg" || legs == "both" {
+		legParam = legs
+	}
+
+	// Note: uuid_broadcast loop behavior is not a simple integer.
+	// A loop value of 0 or 1 means play once. For true looping, specific dialplan apps or sched_broadcast might be needed.
+	// Here, we'll just pass the URL and legs. Loop > 1 might not behave as expected with simple uuid_broadcast.
+	// A more advanced implementation might use `loop_playback` app if targeting a single channel leg.
+	// For now, we acknowledge the loop parameter but the basic uuid_broadcast won't use it for >1 looping.
+	if loop > 1 {
+		s.logger.Warnf("Looping > 1 for PlayAudioOnCall on call %s may not be supported by simple uuid_broadcast. Playing once.", callSid)
+	}
+
+	// Format: bgapi uuid_broadcast <uuid> <path> [aleg|bleg|both]
+	command := fmt.Sprintf("bgapi uuid_broadcast %s %s %s", call.SID, playURL, legParam)
+	s.logger.Debugf("Sending ESL command for PlayAudioOnCall: %s", command)
+
+	jobID, err := s.eslClient.SendCommand(command)
+	if err != nil {
+		s.logger.Errorf("ESL PlayAudioOnCall command failed for call %s: %v", callSid, err)
+		return "", fmt.Errorf("%w: %v", ErrESLCommandFailed_CS, err)
+	}
+	return jobID, nil
+}
+
+func (s *CallService) SayTextOnCall(ctx context.Context, accountSid, callSid string, text string, language *string, voice *string, legs string) (string, error) {
+	s.logger.Infof("Attempting to say text on call %s for account %s. Legs: %s", callSid, accountSid, legs)
+	call, err := s.GetCallBySID(accountSid, callSid)
+	if err != nil {
+		return "", err
+	}
+	if call.Status != domain.CallStatusInProgress {
+		return "", fmt.Errorf("%w: call SID %s is in status %s", ErrCallInvalidState_CS, callSid, call.Status)
+	}
+	if s.eslClient == nil {
+		return "", ErrESLClientNotAvailable_CS
+	}
+
+	// Default legs to "aleg" if empty
+	legParam := "aleg"
+	if legs == "bleg" || legs == "both" { // Freeswitch uuid_speak does not directly support 'both' legs in one command. It targets a single UUID.
+		                                 // This would typically apply to the A-leg (call.SID). B-leg would need its own UUID.
+		s.logger.Warnf("SayTextOnCall: 'legs' parameter '%s' for uuid_speak will target A-leg by default or requires B-leg UUID for specific targeting not yet implemented here.", legs)
+		if legs == "both" { legParam = "aleg" } // Defaulting 'both' to 'aleg' for uuid_speak
+	}
+
+	// Defaults for TTS engine and voice
+	ttsEngine := "flite" // Default engine
+	ttsVoice := "slt"    // Default voice for flite
+
+	if language != nil && *language != "" {
+		// Basic language to voice/engine mapping (can be expanded)
+		// This is highly dependent on installed TTS engines and voices on Freeswitch
+		s.logger.Infof("Language specified: %s. TTS Engine/Voice selection might need more specific logic.", *language)
+		// Example: if strings.HasPrefix(*language, "en") { ttsVoice = "slt" }
+	}
+	if voice != nil && *voice != "" {
+		ttsVoice = *voice // Override default if specific voice is given
+	}
+
+	// Format: bgapi uuid_speak <uuid> <engine_name> <voice_name> <text_to_speak>
+	// Note: uuid_speak targets a single channel. 'legs' param here is conceptual for API consistency.
+	// If bleg control is needed, bleg_uuid would be required.
+	command := fmt.Sprintf("bgapi uuid_speak %s %s %s '%s'", call.SID, ttsEngine, ttsVoice, text)
+	s.logger.Debugf("Sending ESL command for SayTextOnCall: %s", command)
+
+	jobID, err := s.eslClient.SendCommand(command)
+	if err != nil {
+		s.logger.Errorf("ESL SayTextOnCall command failed for call %s: %v", callSid, err)
+		return "", fmt.Errorf("%w: %v", ErrESLCommandFailed_CS, err)
+	}
+	return jobID, nil
+}
+
+func (s *CallService) SendDTMFOnCall(ctx context.Context, accountSid, callSid string, digits string, durationMs *int, legs string) (string, error) {
+	s.logger.Infof("Attempting to send DTMF on call %s for account %s. Digits: %s, Legs: %s", callSid, accountSid, digits, legs)
+	call, err := s.GetCallBySID(accountSid, callSid)
+	if err != nil {
+		return "", err
+	}
+	if call.Status != domain.CallStatusInProgress {
+		return "", fmt.Errorf("%w: call SID %s is in status %s", ErrCallInvalidState_CS, callSid, call.Status)
+	}
+	if s.eslClient == nil {
+		return "", ErrESLClientNotAvailable_CS
+	}
+
+	// uuid_send_dtmf targets a specific channel UUID. 'legs' might be conceptual here.
+	// If B-leg DTMF is needed, the B-leg's UUID would be required.
+	// Defaulting to A-leg (call.SID).
+	if legs != "" && legs != "aleg" {
+		s.logger.Warnf("SendDTMFOnCall: 'legs' parameter '%s' for uuid_send_dtmf will target A-leg by default. B-leg specific DTMF requires B-leg UUID.", legs)
+	}
+
+	// DTMF duration is often a channel variable (dtmf_duration) set before sending digits,
+	// or specific to the application used (e.g., send_dtmf app).
+	// uuid_send_dtmf itself doesn't take duration per digit.
+	if durationMs != nil {
+		s.logger.Infof("DTMF duration of %dms specified for call %s. This might need pre-setting 'dtmf_duration' channel variable if not default.", *durationMs, callSid)
+		// Example: s.eslClient.SendCommand(fmt.Sprintf("bgapi uuid_setvar %s dtmf_duration %d", call.SID, *durationMs))
+		// For simplicity, this pre-set is omitted, relying on FS default or prior channel setup.
+	}
+
+	// Format: bgapi uuid_send_dtmf <uuid> <digits>
+	command := fmt.Sprintf("bgapi uuid_send_dtmf %s %s", call.SID, digits)
+	s.logger.Debugf("Sending ESL command for SendDTMFOnCall: %s", command)
+
+	jobID, err := s.eslClient.SendCommand(command)
+	if err != nil {
+		s.logger.Errorf("ESL SendDTMFOnCall command failed for call %s: %v", callSid, err)
+		return "", fmt.Errorf("%w: %v", ErrESLCommandFailed_CS, err)
+	}
+	return jobID, nil
+}
+
+func (s *CallService) StartRecordingCall(ctx context.Context, accountSid, callSid string, fileName *string, maxDurationSec *int, format *string, playBeep *bool) (string, string, error) {
+	s.logger.Infof("Attempting to start recording on call %s for account %s.", callSid, accountSid)
+	call, err := s.GetCallBySID(accountSid, callSid)
+	if err != nil {
+		return "", "", err
+	}
+	if call.Status != domain.CallStatusInProgress {
+		return "", "", fmt.Errorf("%w: call SID %s is in status %s", ErrCallInvalidState_CS, callSid, call.Status)
+	}
+	if s.eslClient == nil {
+		return "", "", ErrESLClientNotAvailable_CS
+	}
+
+	actualFormat := "wav" // Default format
+	if format != nil && (*format == "wav" || *format == "mp3") {
+		actualFormat = *format
+	}
+
+	var recordingFileName string
+	if fileName != nil && *fileName != "" {
+		recordingFileName = fmt.Sprintf("%s.%s", *fileName, actualFormat)
+	} else {
+		// Generate a default filename
+		recordingFileName = fmt.Sprintf("%s_%d.%s", callSid, time.Now().UnixNano(), actualFormat)
+	}
+	// This path should be configurable and match Freeswitch's recording directory
+	// For now, using a placeholder structure.
+	// Ensure accountSid directory exists on FS or use a flat structure if simpler.
+	fullRecordingPath := fmt.Sprintf("/var/lib/freeswitch/recordings/%s/%s", accountSid, recordingFileName)
+
+
+	// uuid_record <uuid> start <path> [limit_sec]
+	// play_beep is not a direct parameter of uuid_record. It's often part of 'record' application.
+	// For API consistency, we acknowledge it. Could play a beep tone separately if needed.
+	if playBeep != nil && *playBeep {
+		s.logger.Info("PlayBeep requested for StartRecordingCall on call %s. This might require separate beep playback if not part of uuid_record.", callSid)
+		// Example: s.eslClient.SendCommand(fmt.Sprintf("bgapi uuid_playback %s tone_stream://%%(1000,0,640) aleg", call.SID))
+	}
+
+	command := fmt.Sprintf("bgapi uuid_record %s start %s", call.SID, fullRecordingPath)
+	if maxDurationSec != nil && *maxDurationSec > 0 {
+		command += fmt.Sprintf(" %d", *maxDurationSec)
+	}
+	s.logger.Debugf("Sending ESL command for StartRecordingCall: %s", command)
+
+	jobID, err := s.eslClient.SendCommand(command)
+	if err != nil {
+		s.logger.Errorf("ESL StartRecordingCall command failed for call %s: %v", callSid, err)
+		return "", "", fmt.Errorf("%w: %v", ErrESLCommandFailed_CS, err)
+	}
+
+	// As per simplified focus, DB interaction for recording metadata is omitted here.
+	// It's assumed RECORD_STOP event will handle metadata creation.
+	// If API needs to create a preliminary record, it would be done here.
+
+	return recordingFileName, jobID, nil
+}
+
+func (s *CallService) StopRecordingCall(ctx context.Context, accountSid, callSid string, recordingNameOrUUID string) (string, error) {
+	s.logger.Infof("Attempting to stop recording '%s' on call %s for account %s.", recordingNameOrUUID, callSid, accountSid)
+	call, err := s.GetCallBySID(accountSid, callSid)
+	if err != nil {
+		return "", err
+	}
+	if call.Status != domain.CallStatusInProgress && call.Status != domain.CallStatusRinging { // Allow stopping even if ringing but recording started
+		s.logger.Warnf("Call %s is in status %s, may not be actively recording or recording already stopped.", callSid, call.Status)
+		// Depending on strictness, could return ErrCallInvalidState_CS, but often stop is best-effort.
+	}
+	if s.eslClient == nil {
+		return "", ErrESLClientNotAvailable_CS
+	}
+
+	// Ensure `recordingNameOrUUID` corresponds to what `uuid_record stop` expects.
+	// If it's a full path, use that. If it's 'all', use 'all'.
+	// The `recordingNameOrUUID` here is the one returned by `StartRecordingCall` (filename part) or a specific recording SID/UUID from events.
+	// For simplicity, if it contains a '.', assume it's a filename, otherwise treat as 'all' or specific UUID if that's how FS handles it.
+	// A common pattern is `uuid_record <call_uuid> stop <path_to_file_being_recorded>` or `uuid_record <call_uuid> stop all`
+	// Using the provided name directly, assuming it's the correct path or 'all'.
+	// If it was just a filename, construct full path similar to StartRecordingCall
+	// For now, we'll assume `recordingNameOrUUID` is the correct identifier for FS (e.g. full path or 'all')
+
+	// If recordingNameOrUUID is just a filename like "myrec.wav", we might need to reconstruct the full path.
+	// However, the FS `uuid_record stop` command often takes the same path argument given to `start`.
+	// If `recordingNameOrUUID` is a specific recording file (e.g. from a previous StartRecordingCall), use it.
+	// If it's meant to be a generic stop, 'all' is common.
+	// Let's assume `recordingNameOrUUID` is the specific file path or 'all'.
+
+	command := fmt.Sprintf("bgapi uuid_record %s stop %s", call.SID, recordingNameOrUUID)
+	s.logger.Debugf("Sending ESL command for StopRecordingCall: %s", command)
+
+	jobID, err := s.eslClient.SendCommand(command)
+	if err != nil {
+		s.logger.Errorf("ESL StopRecordingCall command failed for call %s: %v", callSid, err)
+		return "", fmt.Errorf("%w: %v", ErrESLCommandFailed_CS, err)
+	}
+	return jobID, nil
+}
+
+func (s *CallService) HangupCall(ctx context.Context, accountSid, callSid string, cause string) (string, error) {
+	s.logger.Infof("Attempting to hangup call %s for account %s. Cause: %s", callSid, accountSid, cause)
+	_, err := s.GetCallBySID(accountSid, callSid) // Validate call exists and belongs to account
+	if err != nil {
+		return "", err
+	}
+	// No specific state check for hangup, can be attempted in most states.
+	if s.eslClient == nil {
+		return "", ErrESLClientNotAvailable_CS
+	}
+
+	hangupCause := cause
+	if hangupCause == "" {
+		hangupCause = "NORMAL_CLEARING" // Default Freeswitch hangup cause
+	}
+
+	// Format: bgapi uuid_kill <uuid> [cause]
+	command := fmt.Sprintf("bgapi uuid_kill %s %s", callSid, hangupCause)
+	s.logger.Debugf("Sending ESL command for HangupCall: %s", command)
+
+	jobID, err := s.eslClient.SendCommand(command)
+	if err != nil {
+		s.logger.Errorf("ESL HangupCall command failed for call %s: %v", callSid, err)
+		return "", fmt.Errorf("%w: %v", ErrESLCommandFailed_CS, err)
+	}
+
+	// Update call status in DB could be done here or via CHANNEL_HANGUP_COMPLETE event.
+	// For API initiated hangup, it's good to mark it immediately if possible or rely on events.
+	// Current model seems to rely on events for final status updates.
+
+	return jobID, nil
 }

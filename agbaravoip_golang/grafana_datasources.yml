@@ -1,0 +1,9 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy # Server-side access
+    url: http://prometheus:9090 # URL of the Prometheus container
+    isDefault: true
+    editable: true # Allow edits in Grafana UI

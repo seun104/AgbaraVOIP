@@ -9,6 +9,7 @@ import (
 	"github.com/user/agbaravoip_golang/internal/auth"         // For InitJWTSecret & middlewares
 	"github.com/user/agbaravoip_golang/internal/callcontrol" // For XMLProcessor
 	"github.com/user/agbaravoip_golang/internal/config"
+	"github.com/user/agbaravoip_golang/internal/monitoring" // Added for Prometheus
 	"github.com/user/agbaravoip_golang/internal/services"
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
@@ -83,7 +84,14 @@ func NewServer(
 func (s *Server) setupRoutes() {
 	// All API routes are prefixed with /api; versioning within the group
 	apiRouter := s.router.Group("/api")
+
+	// Prometheus Metrics Endpoint (typically without /v1 prefix, but can be grouped if desired)
+	// For simplicity, adding it under /api for now.
+	// Could also be s.router.GET("/metrics", monitoring.PrometheusHandler()) for root level
+	apiRouter.GET("/metrics", monitoring.PrometheusHandler())
+
 	baseRouter := apiRouter.Group("/v1") // Group for v1 routes
+	baseRouter.Use(monitoring.PrometheusMiddleware()) // Apply Prometheus middleware to all v1 routes
 
 	baseRouter.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "UP"}) })
 
@@ -92,7 +100,7 @@ func (s *Server) setupRoutes() {
 
 	// --- Auth Handler for Token Generation (Public) ---
 	// AuthHandler needs CallServicerForESL which includes ValidateCredentials
-	authH := NewAuthHandler(s.callService, s.logger, s.config.Auth.JWTSecret, s.config.Auth.JWTTokenDuration, processedAdminSIDs)
+	authH := NewAuthHandler(s.callService, s.logger, s.config.Auth.JWTSecret, s.config.Auth.JWTTokenDuration, processedAdminSIDs) // Pass processedAdminSIDs
 	baseRouter.POST("/auth/token", authH.GenerateTokenHandler)
 
 	// --- Account Handler (Master Account Creation - potentially public or admin only) ---
@@ -130,19 +138,34 @@ func (s *Server) setupRoutes() {
 
 		// Calls under an account - CallHandler uses CallServicerForESL and IApplicationService
 		callHandler := NewCallHandler(s.callService, s.applicationService, s.logger)
-		callsRoutes := authenticatedAccountRoutes.Group("/calls")
+		callsRouteGroup := authenticatedAccountRoutes.Group("/calls") // Renamed for clarity
 		{
-			callsRoutes.POST("", callHandler.CreateCall)
-			callsRoutes.GET("/:call_sid", callHandler.GetCall)
-			callsRoutes.GET("", callHandler.ListCalls)
-			// Recordings for a call would be e.g. callsRoutes.GET("/:call_sid/recordings", ...)
+			callsRouteGroup.POST("", callHandler.CreateCall)
+			callsRouteGroup.GET("", callHandler.ListCalls) // List calls for the account
+
+			// Routes for specific call SID
+			callSpecificRoutes := callsRouteGroup.Group("/:call_sid")
+			{
+				callSpecificRoutes.GET("", callHandler.GetCall) // Get specific call details
+
+				// Live Call Control Endpoints
+				callSpecificRoutes.POST("/play", callHandler.PlayAudio)
+				callSpecificRoutes.POST("/say", callHandler.SayText)
+				callSpecificRoutes.POST("/dtmf", callHandler.SendDTMF)
+				callSpecificRoutes.POST("/record", callHandler.RecordAction) // Handles start/stop
+				callSpecificRoutes.POST("/hangup", callHandler.HangupLiveCall)
+			}
 		}
 
 		// SMS resources under an account (e.g. list sent/received SMS for this account)
-		// This would use SMSService (available via s.callService)
-		// smsAccountHandler := NewAccountSMSHandler(s.callService, s.logger) // Example
-		// authenticatedAccountRoutes.GET("/sms", smsAccountHandler.ListAccountSMS)
-		// authenticatedAccountRoutes.GET("/sms/:sms_sid", smsAccountHandler.GetAccountSMS)
+		// s.callService (type *services.CallService) implements ISMSService via delegation
+		accountSMSHandler := NewAccountSMSHandler(s.callService, s.logger)
+		smsMessagesRoutes := authenticatedAccountRoutes.Group("/sms/messages")
+		{
+			smsMessagesRoutes.POST("", accountSMSHandler.SendSMS)
+			smsMessagesRoutes.GET("", accountSMSHandler.ListSMSMessages)
+			smsMessagesRoutes.GET("/:sms_sid", accountSMSHandler.GetSMSMessage)
+		}
 	}
 
 	// --- Inbound SMS Endpoint (Typically from Gateway - specific auth, not user JWT) ---

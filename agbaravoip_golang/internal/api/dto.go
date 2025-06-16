@@ -207,6 +207,144 @@ func ToFreeswitchServerResponseList(servers []*domain.FreeswitchServer) []Freesw
 	return responses
 }
 
+// === SMS Management DTOs ===
+
+// SendSMSRequest defines the request for sending an SMS message.
+type SendSMSRequest struct {
+	From              string  `json:"from" binding:"required"` // Sender ID/number
+	To                string  `json:"to" binding:"required"`   // Recipient number
+	Body              string  `json:"body" binding:"required"`
+	StatusCallbackURL *string `json:"status_callback_url,omitempty,url"` // Optional URL for status updates
+}
+
+// SMSMessageResponse represents an SMS message resource in API responses.
+type SMSMessageResponse struct {
+	SID               string              `json:"sid"`
+	AccountSID        string              `json:"account_sid"`
+	To                string              `json:"to"`
+	From              string              `json:"from"`
+	Body              string              `json:"body"`
+	Status            domain.SMSStatus    `json:"status"`
+	Direction         domain.SMSDirection `json:"direction"`
+	Price             *string             `json:"price,omitempty"`
+	PriceUnit         *string             `json:"price_unit,omitempty"`
+	ErrorCode         *int32              `json:"error_code,omitempty"`
+	ErrorMessage      *string             `json:"error_message,omitempty"`
+	GatewayMessageSID *string             `json:"gateway_message_sid,omitempty"`
+	SentAt            *string             `json:"sent_at,omitempty"`     // RFC3339 format
+	DeliveredAt       *string             `json:"delivered_at,omitempty"` // RFC3339 format
+	CreatedAt         string              `json:"created_at"`             // RFC3339 format
+	UpdatedAt         string              `json:"updated_at"`             // RFC3339 format
+}
+
+// ToSMSMessageResponse converts a domain.SMSMessage object to an SMSMessageResponse DTO.
+func ToSMSMessageResponse(sms *domain.SMSMessage) SMSMessageResponse {
+	var price, priceUnit, errorMessage, gatewayMsgSid *string
+	var sentAt, deliveredAt *string
+	var errorCode *int32
+
+	if sms.Price.Valid {
+		price = &sms.Price.String
+	}
+	if sms.PriceUnit.Valid {
+		priceUnit = &sms.PriceUnit.String
+	}
+	if sms.ErrorMessage.Valid {
+		errorMessage = &sms.ErrorMessage.String
+	}
+	if sms.GatewayMessageSID.Valid {
+		gatewayMsgSid = &sms.GatewayMessageSID.String
+	}
+	if sms.ErrorCode.Valid {
+		errorCode = &sms.ErrorCode.Int32
+	}
+	if sms.SentAt.Valid {
+		sAt := sms.SentAt.Time.Format(time.RFC3339)
+		sentAt = &sAt
+	}
+	if sms.DeliveredAt.Valid {
+		dAt := sms.DeliveredAt.Time.Format(time.RFC3339)
+		deliveredAt = &dAt
+	}
+
+	return SMSMessageResponse{
+		SID:               sms.SID,
+		AccountSID:        sms.AccountSID,
+		To:                sms.To,
+		From:              sms.From,
+		Body:              sms.Body,
+		Status:            sms.Status,
+		Direction:         sms.Direction,
+		Price:             price,
+		PriceUnit:         priceUnit,
+		ErrorCode:         errorCode,
+		ErrorMessage:      errorMessage,
+		GatewayMessageSID: gatewayMsgSid,
+		SentAt:            sentAt,
+		DeliveredAt:       deliveredAt,
+		CreatedAt:         sms.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:         sms.UpdatedAt.Format(time.RFC3339),
+	}
+}
+
+// ToSMSMessageResponseList converts a slice of domain.SMSMessage objects to a slice of SMSMessageResponse DTOs.
+func ToSMSMessageResponseList(smsList []*domain.SMSMessage) []SMSMessageResponse {
+	responses := make([]SMSMessageResponse, len(smsList))
+	for i, sms := range smsList {
+		responses[i] = ToSMSMessageResponse(sms)
+	}
+	return responses
+}
+
+// === Live Call Control DTOs ===
+
+// CallPlayRequest defines the request for playing audio on a live call.
+type CallPlayRequest struct {
+	URL  string `json:"url" binding:"required,url"`
+	Loop *int   `json:"loop,omitempty,gte=0"`      // 0 or 1 for no loop effectively in most FS apps, specific loop app might be needed for >1
+	Legs string `json:"legs,omitempty,oneof=aleg bleg both"` // aleg, bleg, both (defaults to aleg if empty)
+}
+
+// CallSayRequest defines the request for speaking text on a live call.
+type CallSayRequest struct {
+	Text     string `json:"text" binding:"required"`
+	Language *string `json:"language,omitempty"` // e.g., "en-US"
+	Voice    *string `json:"voice,omitempty"`    // e.g., "man", "woman", specific TTS engine voice
+	Legs     string  `json:"legs,omitempty,oneof=aleg bleg both"`
+}
+
+// CallDTMFRequest defines the request for sending DTMF tones on a live call.
+type CallDTMFRequest struct {
+	Digits     string `json:"digits" binding:"required"` // e.g., "1234#"
+	DurationMs *int   `json:"duration_ms,omitempty,gte=100,lte=2000"` // Duration for each digit in ms
+	Legs       string `json:"legs,omitempty,oneof=aleg bleg both"`
+}
+
+// CallRecordAction defines the type for recording actions.
+type CallRecordAction string
+const (
+    CallRecordActionStart CallRecordAction = "start"
+    CallRecordActionStop  CallRecordAction = "stop"
+)
+
+// CallRecordRequest defines the request for starting or stopping call recording.
+type CallRecordRequest struct {
+	Action             CallRecordAction `json:"action" binding:"required,oneof=start stop"`
+	FileName           *string          `json:"file_name,omitempty"`            // Optional: Desired filename (server might add UUIDs etc.)
+	MaxDurationSeconds *int             `json:"max_duration_seconds,omitempty,gte=1"`
+	Format             *string          `json:"format,omitempty,oneof=wav mp3"` // Example formats
+	PlayBeep           *bool            `json:"play_beep,omitempty"`
+	// Add other params like silence_thresh, silence_hits if needed
+}
+
+// CallActionResponse is a generic response for live call control actions.
+type CallActionResponse struct {
+	CallSID string `json:"call_sid"`
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+	JobID   string `json:"job_id,omitempty"` // Optional: If the action is async and returns a job ID
+}
+
 // === Gateway DTOs ===
 
 type CreateGatewayRequest struct {

@@ -9,8 +9,9 @@ import (
 type SMSDirection string
 
 const (
-	SMSDirectionOutbound SMSDirection = "outbound" // SMS sent from the system
-	SMSDirectionInbound  SMSDirection = "inbound"  // SMS received by the system
+	SMSDirectionOutbound    SMSDirection = "outbound"     // SMS sent from the system (e.g. via AgbaraXML <Sms>)
+	SMSDirectionInbound     SMSDirection = "inbound"      // SMS received by the system
+	SMSDirectionOutboundAPI SMSDirection = "outbound-api" // SMS sent via API call
 )
 
 // SMSStatus defines the status of an SMS message.

@@ -1,0 +1,29 @@
+global:
+  scrape_interval: 15s # How frequently to scrape targets.
+  evaluation_interval: 15s # How frequently to evaluate rules.
+
+# Alertmanager configuration (optional, can be added later)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#           # - alertmanager:9093
+
+# Rule files (optional, can be added later for alerts)
+# rule_files:
+#   - "alert.rules.yml"
+
+scrape_configs:
+  - job_name: 'agbaravoip_app'
+    # Metrics endpoint exposed by the Go application
+    # Assuming docker-compose service discovery, 'app' is the hostname of your Go app service
+    # and 8080 is the port it listens on (where /api/metrics is served).
+    # Adjust if your app service name or port is different.
+    # The /api/metrics path must match what's configured in server.go
+    metrics_path: /api/metrics
+    static_configs:
+      - targets: ['app:8080'] # Replace 'app:8080' if your service name/port differs
+
+  - job_name: 'prometheus' # To scrape Prometheus itself
+    static_configs:
+      - targets: ['localhost:9090']
